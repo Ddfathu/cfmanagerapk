@@ -8,7 +8,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.cf.manager"
+        applicationId = "com.cf.app"
         minSdk = 24
         targetSdk = 34
         versionCode = 1

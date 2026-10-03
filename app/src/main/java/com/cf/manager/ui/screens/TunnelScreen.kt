@@ -26,7 +26,14 @@ import com.cf.manager.data.api.CfAccountHelper
 import com.cf.manager.data.local.AccountStorage
 import com.cf.manager.data.model.TunnelItem
 import com.cf.manager.data.model.ZoneItem
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import kotlinx.coroutines.launch
+
+data class IngressRuleItem(
+    val hostname: String,
+    val service: String
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,7 +66,44 @@ fun TunnelScreen() {
     var showDeleteDialog by remember { mutableStateOf(false) }
     var tunnelToDelete by remember { mutableStateOf<TunnelItem?>(null) }
 
+    // State Ingress Routing List & Edit
+    var ingressRules by remember { mutableStateOf<List<IngressRuleItem>>(emptyList()) }
+    var isLoadingIngress by remember { mutableStateOf(false) }
+    var editingRule by remember { mutableStateOf<IngressRuleItem?>(null) }
+    var editServiceInput by remember { mutableStateOf("") }
+    var isSavingRule by remember { mutableStateOf(false) }
+
     val scope = rememberCoroutineScope()
+
+    fun loadIngressRules(tunnelId: String) {
+        scope.launch {
+            isLoadingIngress = true
+            try {
+                val accId = CfAccountHelper.ensureAccountId()
+                val res = ApiClient.api.getTunnelConfigurations(accId, tunnelId)
+                if (res.isSuccessful && res.body()?.success == true) {
+                    val configObj = res.body()?.result?.getAsJsonObject("config")
+                    val ingressArr = configObj?.getAsJsonArray("ingress")
+                    val list = mutableListOf<IngressRuleItem>()
+                    ingressArr?.forEach { element ->
+                        val obj = element.asJsonObject
+                        val host = obj.get("hostname")?.asString
+                        val srv = obj.get("service")?.asString ?: ""
+                        if (!host.isNullOrBlank()) {
+                            list.add(IngressRuleItem(host, srv))
+                        }
+                    }
+                    ingressRules = list
+                } else {
+                    ingressRules = emptyList()
+                }
+            } catch (_: Exception) {
+                ingressRules = emptyList()
+            } finally {
+                isLoadingIngress = false
+            }
+        }
+    }
 
     fun loadData() {
         if (email.isBlank() || apiKey.isBlank()) {
@@ -75,20 +119,16 @@ fun TunnelScreen() {
                     return@launch
                 }
 
-                // Ambil daftar tunnel langsung dari Cloudflare v4
                 val resT = ApiClient.api.listTunnels(accId)
                 if (resT.isSuccessful && resT.body()?.success == true) {
                     val list = resT.body()?.result ?: emptyList()
                     tunnels = list
                     if (selectedTunnel == null && list.isNotEmpty()) {
                         selectedTunnel = list[0]
+                        loadIngressRules(list[0].id)
                     }
-                } else {
-                    val err = resT.body()?.errors?.firstOrNull()?.message ?: "HTTP ${resT.code()}"
-                    statusMsg = "Gagal memuat tunnel: $err"
                 }
 
-                // Ambil daftar zone domain
                 val resZ = ApiClient.api.listZones()
                 if (resZ.isSuccessful && resZ.body()?.success == true) {
                     val zList = resZ.body()?.result ?: emptyList()
@@ -115,7 +155,7 @@ fun TunnelScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // --- 1. HEADER & REFRESH ---
+        // --- 1. HEADER ---
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -123,8 +163,8 @@ fun TunnelScreen() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("🚇 Cloudflare Tunnel (Direct)", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("Zero Trust Cloudflared tunnel native", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("🚇 Cloudflare Tunnel", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Kelola Ingress Routing & Public Hostname native", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                 }
                 IconButton(onClick = { loadData() }, enabled = !isLoading) {
                     Text(if (isLoading) "⏳" else "🔄")
@@ -159,7 +199,7 @@ fun TunnelScreen() {
                                 if (tunnelNameInput.isBlank()) return@Button
                                 scope.launch {
                                     isCreating = true
-                                    statusMsg = "Membuat tunnel '${tunnelNameInput}' di Cloudflare..."
+                                    statusMsg = "Membuat tunnel '${tunnelNameInput}'..."
                                     try {
                                         val accId = CfAccountHelper.ensureAccountId()
                                         val payload = mapOf(
@@ -168,21 +208,12 @@ fun TunnelScreen() {
                                         )
                                         val res = ApiClient.api.createTunnel(accId, payload)
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            val createdId = res.body()?.result?.get("id")?.asString ?: ""
                                             statusMsg = "✅ Tunnel '${tunnelNameInput}' berhasil dibuat!"
                                             tunnelNameInput = ""
-
-                                            // Ambil token untuk tunnel baru
-                                            if (createdId.isNotBlank()) {
-                                                val tokRes = ApiClient.api.getTunnelToken(accId, createdId)
-                                                if (tokRes.isSuccessful && tokRes.body()?.success == true) {
-                                                    activeToken = tokRes.body()?.result ?: ""
-                                                }
-                                            }
                                             loadData()
                                         } else {
                                             val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                                            statusMsg = "Gagal buat tunnel: $err"
+                                            statusMsg = "Gagal: $err"
                                         }
                                     } catch (e: Exception) {
                                         statusMsg = "Error: ${e.message}"
@@ -239,7 +270,7 @@ fun TunnelScreen() {
             }
         }
 
-        // --- 4. FORM INGRESS ROUTE (PUBLIC HOSTNAME) ---
+        // --- 4. FORM TAMBAH INGRESS ROUTE (PUBLIC HOSTNAME) ---
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -247,12 +278,9 @@ fun TunnelScreen() {
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    Text("🔗 Hubungkan Public Hostname (Ingress)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    Text("Mengarahkan hostname ke service lokal via Cloudflare Edge", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("🔗 Tambah Public Hostname (Ingress Route)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text("Target Tunnel: ${selectedTunnel?.name ?: "(Pilih Tunnel di bawah)"}", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.height(10.dp))
-
-                    Text("Target Tunnel: ${selectedTunnel?.name ?: "(Belum dipilih)"}", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.primary)
-                    Spacer(modifier = Modifier.height(6.dp))
 
                     ExposedDropdownMenuBox(
                         expanded = zoneExpanded,
@@ -264,9 +292,7 @@ fun TunnelScreen() {
                             readOnly = true,
                             label = { Text("Domain Utama (Zone)") },
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = zoneExpanded) },
-                            modifier = Modifier
-                                .menuAnchor()
-                                .fillMaxWidth()
+                            modifier = Modifier.menuAnchor().fillMaxWidth()
                         )
                         ExposedDropdownMenu(
                             expanded = zoneExpanded,
@@ -289,8 +315,7 @@ fun TunnelScreen() {
                     OutlinedTextField(
                         value = subDomainInput,
                         onValueChange = { subDomainInput = it.lowercase().trim() },
-                        label = { Text("Subdomain (contoh: vpn, ssh, web)") },
-                        placeholder = { Text("Kosongkan jika domain root") },
+                        label = { Text("Subdomain (cth: vpn, ssh, @)") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -311,7 +336,7 @@ fun TunnelScreen() {
                         OutlinedTextField(
                             value = serviceUrlInput,
                             onValueChange = { serviceUrlInput = it.trim() },
-                            label = { Text("Target Lokal (cth: localhost:8080)") },
+                            label = { Text("Service Lokal (cth: localhost:8080)") },
                             modifier = Modifier.weight(1f),
                             singleLine = true
                         )
@@ -324,7 +349,7 @@ fun TunnelScreen() {
                             val tun = selectedTunnel
                             val zon = selectedZone
                             if (tun == null || zon == null) {
-                                statusMsg = "⚠️ Pilih tunnel dan domain utama terlebih dahulu!"
+                                statusMsg = "⚠️️ Pilih tunnel dan domain utama terlebih dahulu!"
                                 return@Button
                             }
                             scope.launch {
@@ -337,20 +362,18 @@ fun TunnelScreen() {
                                     "$serviceType$serviceUrlInput"
                                 }
 
-                                statusMsg = "Menyimpan ingress config & DNS CNAME ke Cloudflare..."
+                                statusMsg = "Menyimpan ingress config ke Cloudflare..."
                                 try {
-                                    // 1. Simpan konfigurasi ingress ke tunnel
-                                    val ingressConfig = mapOf(
-                                        "config" to mapOf(
-                                            "ingress" to listOf(
-                                                mapOf("hostname" to fullHost, "service" to fullService),
-                                                mapOf("service" to "http_status:404")
-                                            )
-                                        )
-                                    )
+                                    val currentList = ingressRules.filter { it.hostname != fullHost }.toMutableList()
+                                    currentList.add(IngressRuleItem(fullHost, fullService))
+
+                                    val ingressArray = currentList.map { mapOf("hostname" to it.hostname, "service" to it.service) }.toMutableList()
+                                    ingressArray.add(mapOf("service" to "http_status:404"))
+
+                                    val ingressConfig = mapOf("config" to mapOf("ingress" to ingressArray))
                                     ApiClient.api.updateTunnelConfigurations(accId, tun.id, ingressConfig)
 
-                                    // 2. Buat DNS CNAME otomatis: hostname -> {tunnel_id}.cfargotunnel.com
+                                    // DNS CNAME
                                     val dnsPayload = mapOf(
                                         "type" to "CNAME",
                                         "name" to fullHost,
@@ -358,14 +381,11 @@ fun TunnelScreen() {
                                         "ttl" to 1,
                                         "proxied" to true
                                     )
-                                    val dnsRes = ApiClient.api.createDns(zon.id, dnsPayload)
+                                    ApiClient.api.createDns(zon.id, dnsPayload)
 
-                                    if (dnsRes.isSuccessful && dnsRes.body()?.success == true) {
-                                        statusMsg = "✅ Hostname '$fullHost' berhasil diarahkan ke $fullService!"
-                                        subDomainInput = ""
-                                    } else {
-                                        statusMsg = "Ingress tersimpan, DNS: ${dnsRes.body()?.errors?.firstOrNull()?.message ?: "Selesai"}"
-                                    }
+                                    statusMsg = "✅ Hostname '$fullHost' berhasil ditambahkan!"
+                                    subDomainInput = ""
+                                    loadIngressRules(tun.id)
                                 } catch (e: Exception) {
                                     statusMsg = "Error: ${e.message}"
                                 } finally {
@@ -376,13 +396,13 @@ fun TunnelScreen() {
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !isRouting && selectedTunnel != null && selectedZone != null
                     ) {
-                        Text(if (isRouting) "Menyimpan Hostname..." else "🚀 Pasang Hostname & DNS CNAME")
+                        Text(if (isRouting) "Menyimpan..." else "🚀 Simpan Hostname & DNS CNAME")
                     }
                 }
             }
         }
 
-        // --- 5. DAFTAR TUNNEL DENGAN INDIKATOR STATUS REAL-TIME ---
+        // --- 5. DAFTAR TUNNEL DENGAN SUB-LIST INGRESS RULES ---
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -390,13 +410,7 @@ fun TunnelScreen() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("Daftar Tunnel (${tunnels.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("Ketuk untuk memilih", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-            }
-        }
-
-        if (tunnels.isEmpty() && !isLoading) {
-            item {
-                Text("Belum ada tunnel di akun ini. Buat baru di bagian atas.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                Text("Ketuk kartu untuk buka Ingress", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             }
         }
 
@@ -404,24 +418,15 @@ fun TunnelScreen() {
             val isSelected = (selectedTunnel?.id == t.id)
             val rawStatus = (t.status ?: "inactive").lowercase()
             val isHealthy = rawStatus == "healthy" || rawStatus == "active"
-            val isDegraded = rawStatus == "degraded"
-
-            val statusColor = when {
-                isHealthy -> Color(0xFF16A34A)
-                isDegraded -> Color(0xFFD97706)
-                else -> Color(0xFFDC2626)
-            }
-
-            val statusLabel = when {
-                isHealthy -> "Aktif"
-                isDegraded -> "Degraded"
-                else -> "Mati"
-            }
+            val statusColor = if (isHealthy) Color(0xFF16A34A) else Color(0xFFDC2626)
 
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { selectedTunnel = t },
+                    .clickable {
+                        selectedTunnel = t
+                        loadIngressRules(t.id)
+                    },
                 colors = CardDefaults.cardColors(
                     containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
                 ),
@@ -445,8 +450,7 @@ fun TunnelScreen() {
 
                         Surface(
                             shape = RoundedCornerShape(16.dp),
-                            color = statusColor.copy(alpha = 0.15f),
-                            modifier = Modifier.padding(start = 8.dp)
+                            color = statusColor.copy(alpha = 0.15f)
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -460,7 +464,7 @@ fun TunnelScreen() {
                                 )
                                 Spacer(modifier = Modifier.width(5.dp))
                                 Text(
-                                    text = statusLabel,
+                                    text = if (isHealthy) "Aktif" else "Mati",
                                     color = statusColor,
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold
@@ -470,7 +474,6 @@ fun TunnelScreen() {
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))
-
                     Text(
                         text = "ID: ${t.id}",
                         style = MaterialTheme.typography.bodySmall,
@@ -489,16 +492,13 @@ fun TunnelScreen() {
                             onClick = {
                                 selectedTunnel = t
                                 scope.launch {
-                                    statusMsg = "Mengambil token untuk '${t.name}'..."
+                                    statusMsg = "Mengambil token '${t.name}'..."
                                     try {
                                         val accId = CfAccountHelper.ensureAccountId()
                                         val res = ApiClient.api.getTunnelToken(accId, t.id)
-                                        if (res.isSuccessful && res.body()?.success == true && !res.body()?.result.isNullOrBlank()) {
+                                        if (res.isSuccessful && res.body()?.success == true) {
                                             activeToken = res.body()?.result ?: ""
-                                            statusMsg = "✅ Token tunnel '${t.name}' berhasil dimuat!"
-                                        } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "Gagal mengambil token"
-                                            statusMsg = "Error: $err"
+                                            statusMsg = "✅ Token tunnel '${t.name}' dimuat!"
                                         }
                                     } catch (e: Exception) {
                                         statusMsg = "Error: ${e.message}"
@@ -508,7 +508,7 @@ fun TunnelScreen() {
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                             modifier = Modifier.height(36.dp)
                         ) {
-                            Text("🔑 Token", style = MaterialTheme.typography.labelMedium)
+                            Text("🔑 Token")
                         }
 
                         Spacer(modifier = Modifier.width(8.dp))
@@ -522,7 +522,89 @@ fun TunnelScreen() {
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                             modifier = Modifier.height(36.dp)
                         ) {
-                            Text("🗑 Hapus", style = MaterialTheme.typography.labelMedium)
+                            Text("🗑 Hapus")
+                        }
+                    }
+
+                    // --- SECTION INGRESS RULES PADA TUNNEL YANG DIPILIH ---
+                    if (isSelected) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider()
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = "🌐 Ingress Routes Aktif (${ingressRules.size}):",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        if (isLoadingIngress) {
+                            Text("Memuat Ingress Cloudflare...", style = MaterialTheme.typography.bodySmall)
+                        } else if (ingressRules.isEmpty()) {
+                            Text("Belum ada hostname routing di tunnel ini.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                ingressRules.forEach { rule ->
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = MaterialTheme.colorScheme.surface
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(rule.hostname, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                                                Text("➡ ${rule.service}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
+                                            }
+
+                                            Row {
+                                                IconButton(
+                                                    onClick = {
+                                                        editingRule = rule
+                                                        editServiceInput = rule.service
+                                                    },
+                                                    modifier = Modifier.size(32.dp)
+                                                ) {
+                                                    Text("✏️")
+                                                }
+
+                                                IconButton(
+                                                    onClick = {
+                                                        scope.launch {
+                                                            statusMsg = "Menghapus rule ${rule.hostname}..."
+                                                            try {
+                                                                val accId = CfAccountHelper.ensureAccountId()
+                                                                val updatedList = ingressRules.filter { it.hostname != rule.hostname }
+                                                                val ingressArr = updatedList.map { mapOf("hostname" to it.hostname, "service" to it.service) }.toMutableList()
+                                                                ingressArr.add(mapOf("service" to "http_status:404"))
+
+                                                                val payload = mapOf("config" to mapOf("ingress" to ingressArr))
+                                                                val res = ApiClient.api.updateTunnelConfigurations(accId, t.id, payload)
+                                                                if (res.isSuccessful && res.body()?.success == true) {
+                                                                    statusMsg = "🗑 Rule ${rule.hostname} dihapus!"
+                                                                    loadIngressRules(t.id)
+                                                                }
+                                                            } catch (e: Exception) {
+                                                                statusMsg = "Error: ${e.message}"
+                                                            }
+                                                        }
+                                                    },
+                                                    modifier = Modifier.size(32.dp)
+                                                ) {
+                                                    Text("🗑")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -545,12 +627,77 @@ fun TunnelScreen() {
         }
     }
 
+    // --- DIALOG EDIT INGRESS SERVICE ---
+    if (editingRule != null) {
+        val targetRule = editingRule!!
+        AlertDialog(
+            onDismissRequest = { editingRule = null },
+            title = { Text("Edit Ingress Route", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("Hostname: ${targetRule.hostname}", fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editServiceInput,
+                        onValueChange = { editServiceInput = it.trim() },
+                        label = { Text("Target Service Lokal") },
+                        placeholder = { Text("http://localhost:8080") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val tun = selectedTunnel ?: return@Button
+                        scope.launch {
+                            isSavingRule = true
+                            statusMsg = "Memperbarui service untuk ${targetRule.hostname}..."
+                            try {
+                                val accId = CfAccountHelper.ensureAccountId()
+                                val updatedList = ingressRules.map {
+                                    if (it.hostname == targetRule.hostname) it.copy(service = editServiceInput) else it
+                                }
+                                val ingressArr = updatedList.map { mapOf("hostname" to it.hostname, "service" to it.service) }.toMutableList()
+                                ingressArr.add(mapOf("service" to "http_status:404"))
+
+                                val payload = mapOf("config" to mapOf("ingress" to ingressArr))
+                                val res = ApiClient.api.updateTunnelConfigurations(accId, tun.id, payload)
+                                if (res.isSuccessful && res.body()?.success == true) {
+                                    statusMsg = "✅ Ingress ${targetRule.hostname} berhasil diupdate ke $editServiceInput!"
+                                    editingRule = null
+                                    loadIngressRules(tun.id)
+                                } else {
+                                    statusMsg = "Gagal update: HTTP ${res.code()}"
+                                }
+                            } catch (e: Exception) {
+                                statusMsg = "Error: ${e.message}"
+                            } finally {
+                                isSavingRule = false
+                            }
+                        }
+                    },
+                    enabled = !isSavingRule && editServiceInput.isNotBlank()
+                ) {
+                    Text(if (isSavingRule) "Menyimpan..." else "💾 Simpan")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingRule = null }) {
+                    Text("Batal")
+                }
+            }
+        )
+    }
+
+    // --- DIALOG HAPUS TUNNEL ---
     if (showDeleteDialog && tunnelToDelete != null) {
         val target = tunnelToDelete!!
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text("Hapus Tunnel?") },
-            text = { Text("Yakin ingin menghapus tunnel '${target.name}' (${target.id}) dari akun Cloudflare? Semua route ingress aktif akan terputus.") },
+            text = { Text("Yakin ingin menghapus tunnel '${target.name}' (${target.id}) dari Cloudflare?") },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteDialog = false
@@ -563,9 +710,6 @@ fun TunnelScreen() {
                                 statusMsg = "🗑 Tunnel '${target.name}' berhasil dihapus!"
                                 if (selectedTunnel?.id == target.id) selectedTunnel = null
                                 loadData()
-                            } else {
-                                val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                                statusMsg = "Gagal: $err"
                             }
                         } catch (e: Exception) {
                             statusMsg = "Error: ${e.message}"

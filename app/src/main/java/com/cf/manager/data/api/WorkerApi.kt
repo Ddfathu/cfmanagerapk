@@ -111,6 +111,36 @@ interface WorkerApi {
         @Path("record_id") recordId: String
     ): Response<CfApiResponse<JsonObject>>
 
+    
+    @POST("zones")
+    suspend fun createZone(
+        @Body payload: Map<String, Any>
+    ): Response<CfApiResponse<JsonObject>>
+
+    @DELETE("zones/{zone_id}")
+    suspend fun deleteZone(
+        @Path("zone_id") zoneId: String
+    ): Response<CfApiResponse<JsonObject>>
+
+    
+    // UNIVERSAL SSL CA RE-ORDER
+    @GET("zones/{zone_id}/ssl/universal/settings")
+    suspend fun getUniversalSslSettings(
+        @Path("zone_id") zoneId: String
+    ): Response<CfApiResponse<JsonObject>>
+
+    @PATCH("zones/{zone_id}/ssl/universal/settings")
+    suspend fun updateUniversalSslSettings(
+        @Path("zone_id") zoneId: String,
+        @Body payload: Map<String, Any>
+    ): Response<CfApiResponse<JsonObject>>
+
+    @PATCH("zones/{zone_id}/ssl/verification")
+    suspend fun reorderSslVerification(
+        @Path("zone_id") zoneId: String,
+        @Body payload: Map<String, Any>
+    ): Response<CfApiResponse<JsonObject>>
+
     // SSL / TLS SETTINGS
     @GET("zones/{zone_id}/settings/ssl")
     suspend fun getSslSetting(
@@ -128,6 +158,47 @@ interface WorkerApi {
         @Path("zone_id") zoneId: String,
         @Body payload: Map<String, String>
     ): Response<CfApiResponse<JsonObject>>
+
+    
+    
+    // RUNTIME & SETTINGS
+    @GET("accounts/{account_id}/workers/scripts/{script_name}/settings")
+    suspend fun getWorkerSettings(
+        @Path("account_id") accountId: String,
+        @Path("script_name") scriptName: String
+    ): Response<CfApiResponse<JsonObject>>
+
+    @PATCH("accounts/{account_id}/workers/scripts/{script_name}/settings")
+    suspend fun updateWorkerSettings(
+        @Path("account_id") accountId: String,
+        @Path("script_name") scriptName: String,
+        @Body payload: Map<String, Any>
+    ): Response<CfApiResponse<JsonObject>>
+
+    // R2 BUCKETS
+    @GET("accounts/{account_id}/r2/buckets")
+    suspend fun listR2Buckets(
+        @Path("account_id") accountId: String
+    ): Response<CfApiResponse<JsonObject>>
+
+    @POST("accounts/{account_id}/r2/buckets")
+    suspend fun createR2Bucket(
+        @Path("account_id") accountId: String,
+        @Body payload: Map<String, String>
+    ): Response<CfApiResponse<JsonObject>>
+
+    @DELETE("accounts/{account_id}/r2/buckets/{bucket_name}")
+    suspend fun deleteR2Bucket(
+        @Path("account_id") accountId: String,
+        @Path("bucket_name") bucketName: String
+    ): Response<CfApiResponse<JsonObject>>
+
+    // WORKER BINDINGS INSPECT
+    @GET("accounts/{account_id}/workers/scripts/{script_name}/bindings")
+    suspend fun getWorkerBindings(
+        @Path("account_id") accountId: String,
+        @Path("script_name") scriptName: String
+    ): Response<CfApiResponse<List<JsonObject>>>
 
     // TUNNEL
     @GET("accounts/{account_id}/cfd_tunnel")
@@ -149,6 +220,12 @@ interface WorkerApi {
     ): Response<CfApiResponse<String>>
 
     @PUT("accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations")
+        @GET("accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations")
+    suspend fun getTunnelConfigurations(
+        @Path("account_id") accountId: String,
+        @Path("tunnel_id") tunnelId: String
+    ): Response<CfApiResponse<JsonObject>>
+
     suspend fun updateTunnelConfigurations(
         @Path("account_id") accountId: String,
         @Path("tunnel_id") tunnelId: String,
@@ -216,6 +293,31 @@ interface WorkerApi {
         @Path("account_id") accountId: String,
         @Path("address_id") addressId: String
     ): Response<CfApiResponse<JsonObject>>
+
+    
+    // EMAIL ROUTING RULES
+    @GET("zones/{zone_id}/email/routing/rules")
+    suspend fun listEmailRules(
+        @Path("zone_id") zoneId: String
+    ): Response<CfApiResponse<List<JsonObject>>>
+
+    @POST("zones/{zone_id}/email/routing/rules")
+    suspend fun createEmailRule(
+        @Path("zone_id") zoneId: String,
+        @Body payload: Map<String, Any>
+    ): Response<CfApiResponse<JsonObject>>
+
+    @DELETE("zones/{zone_id}/email/routing/rules/{rule_id}")
+    suspend fun deleteEmailRule(
+        @Path("zone_id") zoneId: String,
+        @Path("rule_id") ruleId: String
+    ): Response<CfApiResponse<JsonObject>>
+
+    // EMAIL DNS MX SETTINGS
+    @GET("zones/{zone_id}/email/routing/dns")
+    suspend fun getEmailDnsSettings(
+        @Path("zone_id") zoneId: String
+    ): Response<CfApiResponse<List<JsonObject>>>
 
     @POST("zones/{zone_id}/email/routing/enable")
     suspend fun enableEmailRouting(

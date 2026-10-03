@@ -41,7 +41,7 @@ fun MainScreen() {
     }
 
     var selectedTab by remember { mutableStateOf(0) }
-    val tabTitles = listOf("⚡ Worker", "🔑 Vars", "📄 Pages", "🌐 DNS", "🔒 SSL", "🚇 Tunnel", "✉️ Email", "⚙ Akun")
+    val tabTitles = listOf("⚡ Worker", "⚙️ Runtime", "🪣 R2", "🌐 Domain", "🌐 DNS", "📄 Pages", "🚇 Tunnel", "🔒 SSL", "🔑 Vars", "✉️ Email", "⚙ Akun")
 
     // Dialog Tambah Akun
     var showAddDialog by remember { mutableStateOf(false) }
@@ -128,13 +128,16 @@ fun MainScreen() {
         Box(modifier = Modifier.padding(padding)) {
             when (selectedTab) {
                 0 -> WorkerEditorScreen()
-                1 -> VariablesScreen()
-                2 -> PagesScreen()
-                3 -> DnsScreen()
-                4 -> SslScreen()
-                5 -> TunnelScreen()
-                6 -> EmailScreen()
-                7 -> {
+                1 -> RuntimeScreen()
+                2 -> R2Screen()
+                3 -> DomainScreen()
+                4 -> DnsScreen()
+                5 -> PagesScreen()
+                6 -> TunnelScreen()
+                7 -> SslScreen()
+                8 -> VariablesScreen()
+                9 -> EmailScreen()
+                10 -> {
                     // TAB PENGATURAN AKUN RESMI DIRECT
                     LazyColumn(
                         modifier = Modifier
