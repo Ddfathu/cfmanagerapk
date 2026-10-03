@@ -247,7 +247,7 @@ interface WorkerApi {
     @POST("accounts/{account_id}/pages/projects")
     suspend fun createPagesProject(
         @Path("account_id") accountId: String,
-        @Body payload: Map<String, String>
+        @Body payload: Map<String, Any>
     ): Response<CfApiResponse<JsonObject>>
 
     @DELETE("accounts/{account_id}/pages/projects/{project_name}")

@@ -32,6 +32,7 @@ import com.cf.manager.data.api.CfAccountHelper
 import com.cf.manager.data.local.AccountStorage
 import com.cf.manager.data.local.PagesDeploySnapshot
 import com.cf.manager.data.local.PagesHistoryStorage
+import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
