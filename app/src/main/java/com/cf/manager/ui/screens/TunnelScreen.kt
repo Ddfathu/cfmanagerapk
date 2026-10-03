@@ -82,15 +82,30 @@ fun TunnelScreen() {
                 val accId = CfAccountHelper.ensureAccountId()
                 val res = ApiClient.api.getTunnelConfigurations(accId, tunnelId)
                 if (res.isSuccessful && res.body()?.success == true) {
-                    val configObj = res.body()?.result?.getAsJsonObject("config")
+                    val resultJson = res.body()?.result
+                    
+                    val configObj = when {
+                        resultJson?.isJsonObject == true && resultJson.asJsonObject.has("config") -> {
+                            resultJson.asJsonObject.getAsJsonObject("config")
+                        }
+                        resultJson?.isJsonObject == true && resultJson.asJsonObject.has("ingress") -> {
+                            resultJson.asJsonObject
+                        }
+                        else -> null
+                    }
+
                     val ingressArr = configObj?.getAsJsonArray("ingress")
                     val list = mutableListOf<IngressRuleItem>()
+                    
                     ingressArr?.forEach { element ->
-                        val obj = element.asJsonObject
-                        val host = obj.get("hostname")?.asString
-                        val srv = obj.get("service")?.asString ?: ""
-                        if (!host.isNullOrBlank()) {
-                            list.add(IngressRuleItem(host, srv))
+                        if (element.isJsonObject) {
+                            val obj = element.asJsonObject
+                            val host = obj.get("hostname")?.asString
+                            val srv = obj.get("service")?.asString ?: ""
+                            
+                            if (!host.isNullOrBlank() && !srv.contains("http_status:404")) {
+                                list.add(IngressRuleItem(host, srv))
+                            }
                         }
                     }
                     ingressRules = list
@@ -155,7 +170,6 @@ fun TunnelScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // --- 1. HEADER ---
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -172,7 +186,6 @@ fun TunnelScreen() {
             }
         }
 
-        // --- 2. CARD BUAT TUNNEL BARU ---
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -231,7 +244,6 @@ fun TunnelScreen() {
             }
         }
 
-        // --- 3. RUN TOKEN VIEWER ---
         if (activeToken.isNotEmpty()) {
             item {
                 Card(
@@ -270,7 +282,6 @@ fun TunnelScreen() {
             }
         }
 
-        // --- 4. FORM TAMBAH INGRESS ROUTE (PUBLIC HOSTNAME) ---
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -349,7 +360,7 @@ fun TunnelScreen() {
                             val tun = selectedTunnel
                             val zon = selectedZone
                             if (tun == null || zon == null) {
-                                statusMsg = "⚠️️ Pilih tunnel dan domain utama terlebih dahulu!"
+                                statusMsg = "⚠ Pilih tunnel dan domain utama terlebih dahulu!"
                                 return@Button
                             }
                             scope.launch {
@@ -373,7 +384,6 @@ fun TunnelScreen() {
                                     val ingressConfig = mapOf("config" to mapOf("ingress" to ingressArray))
                                     ApiClient.api.updateTunnelConfigurations(accId, tun.id, ingressConfig)
 
-                                    // DNS CNAME
                                     val dnsPayload = mapOf(
                                         "type" to "CNAME",
                                         "name" to fullHost,
@@ -402,7 +412,6 @@ fun TunnelScreen() {
             }
         }
 
-        // --- 5. DAFTAR TUNNEL DENGAN SUB-LIST INGRESS RULES ---
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -526,7 +535,6 @@ fun TunnelScreen() {
                         }
                     }
 
-                    // --- SECTION INGRESS RULES PADA TUNNEL YANG DIPILIH ---
                     if (isSelected) {
                         Spacer(modifier = Modifier.height(12.dp))
                         HorizontalDivider()
@@ -627,7 +635,6 @@ fun TunnelScreen() {
         }
     }
 
-    // --- DIALOG EDIT INGRESS SERVICE ---
     if (editingRule != null) {
         val targetRule = editingRule!!
         AlertDialog(
@@ -665,7 +672,7 @@ fun TunnelScreen() {
                                 val payload = mapOf("config" to mapOf("ingress" to ingressArr))
                                 val res = ApiClient.api.updateTunnelConfigurations(accId, tun.id, payload)
                                 if (res.isSuccessful && res.body()?.success == true) {
-                                    statusMsg = "✅ Ingress ${targetRule.hostname} berhasil diupdate ke $editServiceInput!"
+                                    statusMsg = "✅ Ingress ${targetRule.hostname} berhasil diupdate!"
                                     editingRule = null
                                     loadIngressRules(tun.id)
                                 } else {
@@ -691,7 +698,6 @@ fun TunnelScreen() {
         )
     }
 
-    // --- DIALOG HAPUS TUNNEL ---
     if (showDeleteDialog && tunnelToDelete != null) {
         val target = tunnelToDelete!!
         AlertDialog(

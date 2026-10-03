@@ -1,9 +1,11 @@
 package com.cf.manager.ui.screens
 
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -56,6 +59,7 @@ fun WorkerEditorScreen() {
 
     var workers by remember { mutableStateOf<List<String>>(emptyList()) }
     var workerDomainsMap by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var accountSubdomain by remember { mutableStateOf("") }
     var isLoadingWorkers by remember { mutableStateOf(false) }
     var statusMsg by remember { mutableStateOf("") }
 
@@ -66,7 +70,11 @@ fun WorkerEditorScreen() {
     // State Buat Worker Baru
     var showCreateDialog by remember { mutableStateOf(false) }
     var newWorkerName by remember { mutableStateOf("") }
-    var newWorkerCode by remember { mutableStateOf("export default {\n  async fetch(request, env) {\n    return new Response(\"Halo dari Cloudflare Worker!\");\n  }\n};") }
+    var newWorkerCode by remember { mutableStateOf("export default {
+  async fetch(request, env) {
+    return new Response("Halo dari Cloudflare Worker!");
+  }
+};") }
     var newRawUrl by remember { mutableStateOf("") }
     var newCompatDate by remember { mutableStateOf("2024-01-01") }
     var newEnableNodeCompat by remember { mutableStateOf(true) }
@@ -98,6 +106,13 @@ fun WorkerEditorScreen() {
 
     val scope = rememberCoroutineScope()
     val gson = remember { Gson() }
+
+    fun openUrl(urlStr: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlStr))
+            context.startActivity(intent)
+        } catch (_: Exception) {}
+    }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -154,6 +169,16 @@ fun WorkerEditorScreen() {
             isLoadingWorkers = true
             try {
                 val accId = CfAccountHelper.ensureAccountId()
+                
+                // 1. Ambil Subdomain Workers.dev akun
+                try {
+                    val subRes = ApiClient.api.getAccountSubdomain(accId)
+                    if (subRes.isSuccessful && subRes.body()?.success == true) {
+                        accountSubdomain = subRes.body()?.result?.get("subdomain")?.asString ?: ""
+                    }
+                } catch (_: Exception) {}
+
+                // 2. Ambil List Workers
                 val res = ApiClient.api.listWorkers(accId)
                 if (res.isSuccessful && res.body()?.success == true) {
                     val rawList = res.body()?.result ?: emptyList()
@@ -217,7 +242,11 @@ fun WorkerEditorScreen() {
                     newRawUrl = ""
                     newCompatDate = "2024-01-01"
                     newEnableNodeCompat = true
-                    newWorkerCode = "export default {\n  async fetch(request, env) {\n    return new Response(\"Halo dari Cloudflare Worker!\");\n  }\n};"
+                    newWorkerCode = "export default {
+  async fetch(request, env) {
+    return new Response("Halo dari Cloudflare Worker!");
+  }
+};"
                     showCreateDialog = true
                 },
                 modifier = Modifier.fillMaxWidth()
@@ -249,6 +278,7 @@ fun WorkerEditorScreen() {
 
         items(workers) { wName ->
             val customDomain = workerDomainsMap[wName]
+            val workersDevUrl = if (accountSubdomain.isNotBlank()) "https://$wName.$accountSubdomain.workers.dev" else ""
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -263,11 +293,33 @@ fun WorkerEditorScreen() {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("⚡ $wName", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            Spacer(modifier = Modifier.height(2.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            // URL Workers.dev bisa diklik
+                            if (workersDevUrl.isNotBlank()) {
+                                Text(
+                                    text = "🔗 $workersDevUrl",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline,
+                                    modifier = Modifier.clickable { openUrl(workersDevUrl) }
+                                )
+                            }
+
+                            // URL Custom Domain bisa diklik
                             if (!customDomain.isNullOrBlank()) {
-                                Text("🌐 $customDomain", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                            } else {
-                                Text("Belum terhubung custom domain", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                                val customUrl = "https://$customDomain"
+                                Text(
+                                    text = "🌐 $customUrl",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.secondary,
+                                    textDecoration = TextDecoration.Underline,
+                                    modifier = Modifier.clickable { openUrl(customUrl) }
+                                )
+                            }
+
+                            if (workersDevUrl.isBlank() && customDomain.isNullOrBlank()) {
+                                Text("Belum ada URL publik aktif", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                             }
                         }
                     }
@@ -345,7 +397,7 @@ fun WorkerEditorScreen() {
         }
     }
 
-    // ================= MODAL EDIT SCRIPT =================
+    // ================= MODAL EDIT SCRIPT (ATOMIC MULTIPART DEPLOY) =================
     if (showEditDialog && activeWorkerToEdit.isNotBlank()) {
         Dialog(
             onDismissRequest = { if (!isSavingEdit) showEditDialog = false },
@@ -491,9 +543,9 @@ fun WorkerEditorScreen() {
                                         val metadataObj = JsonObject()
                                         metadataObj.addProperty("main_module", "index.js")
                                         metadataObj.addProperty("compatibility_date", editCompatDate)
-                                        if (editEnableNodeCompat) {
-                                            metadataObj.add("compatibility_flags", gson.toJsonTree(listOf("nodejs_compat")))
-                                        }
+                                        val flagsArr = mutableListOf<String>()
+                                        if (editEnableNodeCompat) flagsArr.add("nodejs_compat")
+                                        metadataObj.add("compatibility_flags", gson.toJsonTree(flagsArr))
 
                                         val metaBody = metadataObj.toString().toRequestBody("application/json".toMediaTypeOrNull())
                                         val scriptBody = editingScriptCode.toRequestBody("application/javascript+module".toMediaTypeOrNull())
@@ -503,6 +555,7 @@ fun WorkerEditorScreen() {
                                         if (res.isSuccessful && res.body()?.success == true) {
                                             statusMsg = "✅ Worker '$activeWorkerToEdit' berhasil di-deploy!"
                                             showEditDialog = false
+                                            loadWorkers()
                                         } else {
                                             val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
                                             statusMsg = "Gagal deploy: $err"
@@ -677,9 +730,9 @@ fun WorkerEditorScreen() {
                                         val metadataObj = JsonObject()
                                         metadataObj.addProperty("main_module", "index.js")
                                         metadataObj.addProperty("compatibility_date", newCompatDate)
-                                        if (newEnableNodeCompat) {
-                                            metadataObj.add("compatibility_flags", gson.toJsonTree(listOf("nodejs_compat")))
-                                        }
+                                        val flagsArr = mutableListOf<String>()
+                                        if (newEnableNodeCompat) flagsArr.add("nodejs_compat")
+                                        metadataObj.add("compatibility_flags", gson.toJsonTree(flagsArr))
 
                                         val metaBody = metadataObj.toString().toRequestBody("application/json".toMediaTypeOrNull())
                                         val scriptBody = newWorkerCode.toRequestBody("application/javascript+module".toMediaTypeOrNull())
@@ -908,7 +961,7 @@ fun WorkerEditorScreen() {
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Alignment.End) {
                         TextButton(onClick = { showRouteDialog = false }) { Text("Tutup") }
                     }
                 }
