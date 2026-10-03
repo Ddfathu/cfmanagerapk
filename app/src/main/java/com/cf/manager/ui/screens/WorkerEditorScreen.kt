@@ -63,10 +63,10 @@ fun WorkerEditorScreen() {
     var detectedBindings by remember { mutableStateOf<List<DetectedBinding>>(emptyList()) }
     var showWranglerModal by remember { mutableStateOf(false) }
 
-    // State Buat Worker Baru (Lengkap dengan Runtime & Smart Wrangler)
+    // State Buat Worker Baru
     var showCreateDialog by remember { mutableStateOf(false) }
     var newWorkerName by remember { mutableStateOf("") }
-    var newWorkerCode by remember { mutableStateOf("export default {\n  async fetch(request, env) {\n    return new Response(\"Hello from Cloudflare Worker!\");\n  }\n};") }
+    var newWorkerCode by remember { mutableStateOf("export default {\n  async fetch(request, env) {\n    return new Response(\"Halo dari Cloudflare Worker!\");\n  }\n};") }
     var newRawUrl by remember { mutableStateOf("") }
     var newCompatDate by remember { mutableStateOf("2024-01-01") }
     var newEnableNodeCompat by remember { mutableStateOf(true) }
@@ -173,7 +173,7 @@ fun WorkerEditorScreen() {
                         workerDomainsMap = map
                     }
                 } else {
-                    val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()} */"
+                    val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
                     statusMsg = "Gagal memuat list worker: $err"
                 }
             } catch (e: Exception) {
@@ -191,9 +191,7 @@ fun WorkerEditorScreen() {
     }
 
     LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
@@ -204,7 +202,7 @@ fun WorkerEditorScreen() {
             ) {
                 Column {
                     Text("⚡ Cloudflare Workers", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("Smart Wrangler Binding, Runtime Config & Deploy", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("Smart Wrangler Binding & Runtime Config", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                 }
                 IconButton(onClick = { loadWorkers() }, enabled = !isLoadingWorkers) {
                     Text(if (isLoadingWorkers) "⏳" else "🔄")
@@ -219,7 +217,7 @@ fun WorkerEditorScreen() {
                     newRawUrl = ""
                     newCompatDate = "2024-01-01"
                     newEnableNodeCompat = true
-                    newWorkerCode = "export default {\n  async fetch(request, env) {\n    return new Response(\"Hello from Cloudflare Worker!\");\n  }\n};"
+                    newWorkerCode = "export default {\n  async fetch(request, env) {\n    return new Response(\"Halo dari Cloudflare Worker!\");\n  }\n};"
                     showCreateDialog = true
                 },
                 modifier = Modifier.fillMaxWidth()
@@ -234,11 +232,7 @@ fun WorkerEditorScreen() {
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
                 ) {
-                    Text(
-                        text = statusMsg,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(10.dp)
-                    )
+                    Text(text = statusMsg, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(10.dp))
                 }
             }
         }
@@ -297,10 +291,9 @@ fun WorkerEditorScreen() {
                                         if (res.isSuccessful) {
                                             editingScriptCode = res.body()?.string() ?: ""
                                         } else {
-                                            editingScriptCode = "/* Gagal mengunduh kode: HTTP ${res.code()} */"
+                                            editingScriptCode = "/* Gagal mengunduh kode */"
                                         }
 
-                                        // Muat juga setelan runtime saat ini
                                         try {
                                             val setRes = ApiClient.api.getWorkerSettings(accId, wName)
                                             if (setRes.isSuccessful && setRes.body()?.success == true) {
@@ -352,18 +345,14 @@ fun WorkerEditorScreen() {
         }
     }
 
-    // =========================================================================
-    // 1. MODAL DIALOG EDIT SCRIPT WORKER
-    // =========================================================================
+    // ================= MODAL EDIT SCRIPT =================
     if (showEditDialog && activeWorkerToEdit.isNotBlank()) {
         Dialog(
             onDismissRequest = { if (!isSavingEdit) showEditDialog = false },
             properties = DialogProperties(usePlatformDefaultWidth = false)
         ) {
             Surface(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(12.dp),
+                modifier = Modifier.fillMaxSize().padding(12.dp),
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 6.dp
@@ -396,7 +385,6 @@ fun WorkerEditorScreen() {
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // INPUT TARIK URL RAW
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -434,7 +422,6 @@ fun WorkerEditorScreen() {
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // PENGATURAN RUNTIME (NODE COMPAT + DATE)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -501,8 +488,6 @@ fun WorkerEditorScreen() {
                                     isSavingEdit = true
                                     try {
                                         val accId = CfAccountHelper.ensureAccountId()
-
-                                        // Persiapkan metadata lengkap dengan Runtime & Smart Wrangler Flags
                                         val metadataObj = JsonObject()
                                         metadataObj.addProperty("main_module", "index.js")
                                         metadataObj.addProperty("compatibility_date", editCompatDate)
@@ -519,7 +504,7 @@ fun WorkerEditorScreen() {
                                             statusMsg = "✅ Worker '$activeWorkerToEdit' berhasil di-deploy!"
                                             showEditDialog = false
                                         } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()} */"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
                                             statusMsg = "Gagal deploy: $err"
                                         }
                                     } catch (e: Exception) {
@@ -540,18 +525,14 @@ fun WorkerEditorScreen() {
         }
     }
 
-    // =========================================================================
-    // 2. MODAL DIALOG BUAT WORKER BARU (LENGKAP DENGAN RUNTIME & SMART WRANGLER)
-    // =========================================================================
+    // ================= MODAL BUAT WORKER BARU =================
     if (showCreateDialog) {
         Dialog(
             onDismissRequest = { if (!isDeployingNew) showCreateDialog = false },
             properties = DialogProperties(usePlatformDefaultWidth = false)
         ) {
             Surface(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(12.dp),
+                modifier = Modifier.fillMaxSize().padding(12.dp),
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 6.dp
@@ -628,7 +609,6 @@ fun WorkerEditorScreen() {
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // PENGATURAN RUNTIME SAAT BUAT WORKER BARU
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -666,9 +646,7 @@ fun WorkerEditorScreen() {
                     OutlinedTextField(
                         value = newWorkerCode,
                         onValueChange = { newWorkerCode = it },
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
                         textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace)
                     )
 
@@ -696,7 +674,6 @@ fun WorkerEditorScreen() {
                                     isDeployingNew = true
                                     try {
                                         val accId = CfAccountHelper.ensureAccountId()
-
                                         val metadataObj = JsonObject()
                                         metadataObj.addProperty("main_module", "index.js")
                                         metadataObj.addProperty("compatibility_date", newCompatDate)
@@ -710,11 +687,11 @@ fun WorkerEditorScreen() {
 
                                         val res = ApiClient.api.deployWorkerMultipart(accId, target, metaBody, scriptPart)
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "🎉 Worker '$target' berhasil dibuat dengan Runtime $newCompatDate!"
+                                            statusMsg = "🎉 Worker '$target' berhasil dibuat!"
                                             showCreateDialog = false
                                             loadWorkers()
                                         } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()} */"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
                                             statusMsg = "Gagal deploy: $err"
                                         }
                                     } catch (e: Exception) {
@@ -735,9 +712,7 @@ fun WorkerEditorScreen() {
         }
     }
 
-    // =========================================================================
-    // 3. MODAL SMART WRANGLER RESULT
-    // =========================================================================
+    // ================= MODAL SMART WRANGLER =================
     if (showWranglerModal) {
         Dialog(onDismissRequest = { showWranglerModal = false }) {
             Surface(
@@ -748,12 +723,12 @@ fun WorkerEditorScreen() {
             ) {
                 Column(modifier = Modifier.padding(18.dp)) {
                     Text("🧠 Smart Wrangler AST Parser", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("Deteksi presisi type binding berdasarkan method runtime", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("Deteksi binding berdasarkan runtime script", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
 
                     Spacer(modifier = Modifier.height(12.dp))
 
                     if (detectedBindings.isEmpty()) {
-                        Text("Tidak ditemukan panggilan binding (KV/R2/D1) di dalam script ini.", style = MaterialTheme.typography.bodyMedium)
+                        Text("Tidak ditemukan binding (KV/R2/D1) di script ini.", style = MaterialTheme.typography.bodyMedium)
                     } else {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             detectedBindings.forEach { b ->
@@ -771,14 +746,12 @@ fun WorkerEditorScreen() {
                                             Text(b.variableName, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                                             Text(b.confidenceReason, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                                         }
-
                                         val badgeColor = when (b.type) {
                                             BindingType.KV_NAMESPACE -> Color(0xFF2563EB)
                                             BindingType.R2_BUCKET -> Color(0xFFEA580C)
                                             BindingType.D1_DATABASE -> Color(0xFF059669)
                                             BindingType.PLAIN_TEXT -> Color(0xFF6B7280)
                                         }
-
                                         Surface(shape = RoundedCornerShape(4.dp), color = badgeColor) {
                                             Text(
                                                 text = b.type.name.replace("_", " "),
@@ -804,9 +777,7 @@ fun WorkerEditorScreen() {
         }
     }
 
-    // =========================================================================
-    // 4. MODAL RUTE DOMAIN & HAPUS WORKER
-    // =========================================================================
+    // ================= MODAL RUTE DOMAIN =================
     if (showRouteDialog && activeWorkerForRoute.isNotBlank()) {
         Dialog(onDismissRequest = { showRouteDialog = false }) {
             Surface(
@@ -858,12 +829,12 @@ fun WorkerEditorScreen() {
                                         )
                                         val res = ApiClient.api.putWorkerDomain(accId, payload)
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "✅ Custom domain '$newRouteDomainInput' terhubung!"
+                                            statusMsg = "✅ Domain terhubung!"
                                             newRouteDomainInput = ""
                                             loadWorkerRoutes(activeWorkerForRoute)
                                             loadWorkers()
                                         } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()} */"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
                                             statusMsg = "Gagal: $err"
                                         }
                                     } catch (e: Exception) {
@@ -883,12 +854,12 @@ fun WorkerEditorScreen() {
                     HorizontalDivider()
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    Text("Domain Rute Terdaftar (${activeWorkerRoutes.size}):", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Text("Rute Terdaftar (${activeWorkerRoutes.size}):", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(6.dp))
 
                     if (activeWorkerRoutes.isEmpty()) {
                         Text(
-                            text = if (isLoadingRoutes) "Memuat rute domain..." else "Belum ada custom domain yang diarahkan ke worker ini.",
+                            text = if (isLoadingRoutes) "Memuat..." else "Belum ada custom domain.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.outline,
                             modifier = Modifier.padding(vertical = 8.dp)
@@ -937,7 +908,6 @@ fun WorkerEditorScreen() {
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
-
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = { showRouteDialog = false }) { Text("Tutup") }
                     }
@@ -963,7 +933,7 @@ fun WorkerEditorScreen() {
                                 statusMsg = "🗑 Worker '$workerToDelete' berhasil dihapus!"
                                 loadWorkers()
                             } else {
-                                val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()} */"
+                                val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
                                 statusMsg = "Gagal menghapus: $err"
                             }
                         } catch (e: Exception) {
