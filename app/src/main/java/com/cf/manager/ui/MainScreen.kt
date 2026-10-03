@@ -14,19 +14,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.cf.manager.data.AppConfig
 import com.cf.manager.data.api.ApiClient
+import com.cf.manager.data.api.CfAccountHelper
 import com.cf.manager.data.local.AccountStorage
 import com.cf.manager.data.model.CfAccount
 import com.cf.manager.ui.screens.*
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen() {
     val context = LocalContext.current
     val storage = remember { AccountStorage(context) }
+    val scope = rememberCoroutineScope()
 
-    var backendUrl by remember {
-        mutableStateOf(storage.getBackendUrl().ifBlank { AppConfig.DEFAULT_BASE_URL })
-    }
     var accounts by remember {
         val list = storage.getAccounts()
         if (list.isEmpty()) {
@@ -41,27 +41,43 @@ fun MainScreen() {
     }
 
     var selectedTab by remember { mutableStateOf(0) }
-    val tabTitles = listOf("⚡ Worker", "🔑 Vars", "📄 Pages", "🌐 DNS", "🔒 SSL", "🚇 Tunnel", "✉️ Email", "🗄 Storage", "📊 Stats", "⚙ Akun")
+    val tabTitles = listOf("⚡ Worker", "🔑 Vars", "📄 Pages", "🌐 DNS", "🔒 SSL", "🚇 Tunnel", "✉️ Email", "⚙ Akun")
 
-    // State Dialog Tambah Akun
+    // Dialog Tambah Akun
     var showAddDialog by remember { mutableStateOf(false) }
     var newAlias by remember { mutableStateOf("") }
     var newEmail by remember { mutableStateOf("") }
     var newApiKey by remember { mutableStateOf("") }
 
-    // State Dialog Edit Akun
+    // Dialog Edit Akun
     var showEditDialog by remember { mutableStateOf(false) }
     var editTargetIdx by remember { mutableStateOf(-1) }
     var editAlias by remember { mutableStateOf("") }
     var editEmail by remember { mutableStateOf("") }
     var editApiKey by remember { mutableStateOf("") }
 
+    var accountStatusNotice by remember { mutableStateOf("") }
+
     val activeAccount = accounts.getOrElse(activeIdx) { CfAccount(alias = "Default", email = "", apiKey = "") }
 
-    LaunchedEffect(backendUrl, activeAccount) {
-        ApiClient.updateBaseUrl(backendUrl)
-        AppConfig.activeEmail = activeAccount.email
-        AppConfig.activeApiKey = activeAccount.apiKey
+    fun refreshActiveSession(acc: CfAccount) {
+        AppConfig.activeEmail = acc.email
+        AppConfig.activeApiKey = acc.apiKey
+        ApiClient.activeAccountId = ""
+        scope.launch {
+            if (acc.email.isNotBlank() && acc.apiKey.isNotBlank()) {
+                val accId = CfAccountHelper.ensureAccountId()
+                accountStatusNotice = if (accId.isNotBlank()) {
+                    "✅ Terhubung ke CF Account ID: $accId"
+                } else {
+                    "⚠️ Kredensial belum valid / gagal terhubung ke Cloudflare."
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(activeAccount) {
+        refreshActiveSession(activeAccount)
     }
 
     Scaffold(
@@ -69,7 +85,7 @@ fun MainScreen() {
             TopAppBar(
                 title = {
                     Column {
-                        Text("CF Manager", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("CF Manager (Direct Native)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text(
                             text = "Akun Aktif: ${activeAccount.alias} (${activeAccount.email.ifBlank { "Belum diisi" }})",
                             style = MaterialTheme.typography.bodySmall,
@@ -90,7 +106,7 @@ fun MainScreen() {
                         )
                     }
                 }
-                // WATERMARK FOOTER
+                // FOOTER WATERMARK PERMANEN DEDE FATHU
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     color = MaterialTheme.colorScheme.surfaceVariant
@@ -118,10 +134,8 @@ fun MainScreen() {
                 4 -> SslScreen()
                 5 -> TunnelScreen()
                 6 -> EmailScreen()
-                7 -> StorageScreen()
-                8 -> StatsScreen()
-                9 -> {
-                    // TAB PENGATURAN & MULTI-AKUN YANG BERSIH & RAPI
+                7 -> {
+                    // TAB PENGATURAN AKUN RESMI DIRECT
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxSize()
@@ -129,22 +143,25 @@ fun MainScreen() {
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                         item {
-                            Text("⚙️ Pengaturan Server & Akun", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Text("⚙️️ Pengaturan Akun Cloudflare", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            Text("Aplikasi terhubung langsung ke https://api.cloudflare.com/client/v4/", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
 
-                            OutlinedTextField(
-                                value = backendUrl,
-                                onValueChange = {
-                                    backendUrl = it
-                                    storage.setBackendUrl(it)
-                                    ApiClient.updateBaseUrl(it)
-                                },
-                                label = { Text("URL Worker Backend (Pusat)") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                            if (accountStatusNotice.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.secondaryContainer
+                                ) {
+                                    Text(
+                                        text = accountStatusNotice,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.padding(8.dp)
+                                    )
+                                }
+                            }
 
-                            Spacer(modifier = Modifier.height(14.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
                             HorizontalDivider()
                             Spacer(modifier = Modifier.height(10.dp))
 
@@ -153,7 +170,7 @@ fun MainScreen() {
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("Daftar Akun Cloudflare (${accounts.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Text("Daftar Akun (${accounts.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                                 Button(onClick = {
                                     newAlias = "Akun ${accounts.size + 1}"
                                     newEmail = ""
@@ -180,8 +197,7 @@ fun MainScreen() {
                                     .clickable {
                                         activeIdx = index
                                         storage.setActiveIndex(index)
-                                        AppConfig.activeEmail = acc.email
-                                        AppConfig.activeApiKey = acc.apiKey
+                                        refreshActiveSession(acc)
                                     },
                                 colors = CardDefaults.cardColors(
                                     containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
@@ -203,10 +219,7 @@ fun MainScreen() {
                                             color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                         )
                                         Spacer(modifier = Modifier.height(2.dp))
-                                        Text(
-                                            text = "Email: ${acc.email.ifBlank { "(Kosong)" }}",
-                                            style = MaterialTheme.typography.bodySmall
-                                        )
+                                        Text(text = "Email: ${acc.email.ifBlank { "(Kosong)" }}", style = MaterialTheme.typography.bodySmall)
                                         Text(
                                             text = "Key: ${if (acc.apiKey.length > 8) acc.apiKey.take(8) + "••••••••" else "(Kosong)"}",
                                             style = MaterialTheme.typography.bodySmall,
@@ -215,7 +228,6 @@ fun MainScreen() {
                                     }
 
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        // Tombol Edit Dialog
                                         IconButton(onClick = {
                                             editTargetIdx = index
                                             editAlias = acc.alias
@@ -226,7 +238,6 @@ fun MainScreen() {
                                             Text("✏️")
                                         }
 
-                                        // Tombol Hapus Akun
                                         if (accounts.size > 1) {
                                             IconButton(onClick = {
                                                 val updated = accounts.toMutableList().apply { removeAt(index) }
@@ -237,8 +248,7 @@ fun MainScreen() {
                                                     storage.setActiveIndex(0)
                                                 }
                                                 val curr = updated[activeIdx]
-                                                AppConfig.activeEmail = curr.email
-                                                AppConfig.activeApiKey = curr.apiKey
+                                                refreshActiveSession(curr)
                                             }) {
                                                 Text("🗑")
                                             }
@@ -249,11 +259,10 @@ fun MainScreen() {
                         }
                     }
 
-                    // DIALOG TAMBAH AKUN BARU
                     if (showAddDialog) {
                         AlertDialog(
                             onDismissRequest = { showAddDialog = false },
-                            title = { Text("Tambah Akun Baru", fontWeight = FontWeight.Bold) },
+                            title = { Text("Tambah Akun Cloudflare", fontWeight = FontWeight.Bold) },
                             text = {
                                 Column(modifier = Modifier.fillMaxWidth()) {
                                     OutlinedTextField(
@@ -275,7 +284,8 @@ fun MainScreen() {
                                     OutlinedTextField(
                                         value = newApiKey,
                                         onValueChange = { newApiKey = it.trim() },
-                                        label = { Text("Global API Key") },
+                                        label = { Text("Global API Key / API Token") },
+                                        singleLine = true,
                                         modifier = Modifier.fillMaxWidth()
                                     )
                                 }
@@ -290,8 +300,7 @@ fun MainScreen() {
                                         storage.saveAccounts(list)
                                         activeIdx = list.size - 1
                                         storage.setActiveIndex(activeIdx)
-                                        AppConfig.activeEmail = newAcc.email
-                                        AppConfig.activeApiKey = newAcc.apiKey
+                                        refreshActiveSession(newAcc)
                                         showAddDialog = false
                                     }
                                 }) {
@@ -306,7 +315,6 @@ fun MainScreen() {
                         )
                     }
 
-                    // DIALOG EDIT AKUN
                     if (showEditDialog && editTargetIdx in accounts.indices) {
                         AlertDialog(
                             onDismissRequest = { showEditDialog = false },
@@ -332,7 +340,8 @@ fun MainScreen() {
                                     OutlinedTextField(
                                         value = editApiKey,
                                         onValueChange = { editApiKey = it.trim() },
-                                        label = { Text("Global API Key") },
+                                        label = { Text("Global API Key / API Token") },
+                                        singleLine = true,
                                         modifier = Modifier.fillMaxWidth()
                                     )
                                 }
@@ -348,8 +357,7 @@ fun MainScreen() {
                                     accounts = list
                                     storage.saveAccounts(list)
                                     if (editTargetIdx == activeIdx) {
-                                        AppConfig.activeEmail = editEmail
-                                        AppConfig.activeApiKey = editApiKey
+                                        refreshActiveSession(list[editTargetIdx])
                                     }
                                     showEditDialog = false
                                 }) {

@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.cf.manager.data.AppConfig
 import com.cf.manager.data.api.ApiClient
+import com.cf.manager.data.api.CfAccountHelper
 import com.cf.manager.data.local.AccountStorage
 import com.cf.manager.data.model.TunnelItem
 import com.cf.manager.data.model.ZoneItem
@@ -68,18 +69,32 @@ fun TunnelScreen() {
         scope.launch {
             isLoading = true
             try {
-                val resT = ApiClient.api.listTunnels(email, apiKey)
-                if (resT.isSuccessful) {
-                    tunnels = resT.body() ?: emptyList()
-                    if (selectedTunnel == null && tunnels.isNotEmpty()) {
-                        selectedTunnel = tunnels[0]
-                    }
+                val accId = CfAccountHelper.ensureAccountId()
+                if (accId.isBlank()) {
+                    statusMsg = "Gagal mendeteksi Account ID Cloudflare. Periksa API Key!"
+                    return@launch
                 }
-                val resZ = ApiClient.api.listZones(email, apiKey)
-                if (resZ.isSuccessful) {
-                    zones = resZ.body() ?: emptyList()
-                    if (selectedZone == null && zones.isNotEmpty()) {
-                        selectedZone = zones[0]
+
+                // Ambil daftar tunnel langsung dari Cloudflare v4
+                val resT = ApiClient.api.listTunnels(accId)
+                if (resT.isSuccessful && resT.body()?.success == true) {
+                    val list = resT.body()?.result ?: emptyList()
+                    tunnels = list
+                    if (selectedTunnel == null && list.isNotEmpty()) {
+                        selectedTunnel = list[0]
+                    }
+                } else {
+                    val err = resT.body()?.errors?.firstOrNull()?.message ?: "HTTP ${resT.code()}"
+                    statusMsg = "Gagal memuat tunnel: $err"
+                }
+
+                // Ambil daftar zone domain
+                val resZ = ApiClient.api.listZones()
+                if (resZ.isSuccessful && resZ.body()?.success == true) {
+                    val zList = resZ.body()?.result ?: emptyList()
+                    zones = zList
+                    if (selectedZone == null && zList.isNotEmpty()) {
+                        selectedZone = zList[0]
                     }
                 }
             } catch (e: Exception) {
@@ -108,8 +123,8 @@ fun TunnelScreen() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("🚇 Cloudflare Tunnel", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("Kelola zero-trust tunnel & public hostname", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("🚇 Cloudflare Tunnel (Direct)", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Zero Trust Cloudflared tunnel native", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                 }
                 IconButton(onClick = { loadData() }, enabled = !isLoading) {
                     Text(if (isLoading) "⏳" else "🔄")
@@ -144,16 +159,30 @@ fun TunnelScreen() {
                                 if (tunnelNameInput.isBlank()) return@Button
                                 scope.launch {
                                     isCreating = true
-                                    statusMsg = "Membuat tunnel '${tunnelNameInput}'..."
+                                    statusMsg = "Membuat tunnel '${tunnelNameInput}' di Cloudflare..."
                                     try {
-                                        val res = ApiClient.api.createTunnel(email, apiKey, tunnelNameInput)
+                                        val accId = CfAccountHelper.ensureAccountId()
+                                        val payload = mapOf(
+                                            "name" to tunnelNameInput,
+                                            "config_src" to "cloudflare"
+                                        )
+                                        val res = ApiClient.api.createTunnel(accId, payload)
                                         if (res.isSuccessful && res.body()?.success == true) {
+                                            val createdId = res.body()?.result?.get("id")?.asString ?: ""
                                             statusMsg = "✅ Tunnel '${tunnelNameInput}' berhasil dibuat!"
-                                            activeToken = res.body()?.token ?: ""
                                             tunnelNameInput = ""
+
+                                            // Ambil token untuk tunnel baru
+                                            if (createdId.isNotBlank()) {
+                                                val tokRes = ApiClient.api.getTunnelToken(accId, createdId)
+                                                if (tokRes.isSuccessful && tokRes.body()?.success == true) {
+                                                    activeToken = tokRes.body()?.result ?: ""
+                                                }
+                                            }
                                             loadData()
                                         } else {
-                                            statusMsg = "Gagal: ${res.body()?.msg ?: res.message()}"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                            statusMsg = "Gagal buat tunnel: $err"
                                         }
                                     } catch (e: Exception) {
                                         statusMsg = "Error: ${e.message}"
@@ -171,7 +200,7 @@ fun TunnelScreen() {
             }
         }
 
-        // --- 3. TOKEN VIEWER / RUN COMMAND ---
+        // --- 3. RUN TOKEN VIEWER ---
         if (activeToken.isNotEmpty()) {
             item {
                 Card(
@@ -219,10 +248,10 @@ fun TunnelScreen() {
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text("🔗 Hubungkan Public Hostname (Ingress)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    Text("Rute domain ke service lokal tunnel terpilih", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("Mengarahkan hostname ke service lokal via Cloudflare Edge", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Text("Pilih Tunnel Tujuan: ${selectedTunnel?.name ?: "(Belum dipilih)"}", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.primary)
+                    Text("Target Tunnel: ${selectedTunnel?.name ?: "(Belum dipilih)"}", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.height(6.dp))
 
                     ExposedDropdownMenuBox(
@@ -300,24 +329,43 @@ fun TunnelScreen() {
                             }
                             scope.launch {
                                 isRouting = true
+                                val accId = CfAccountHelper.ensureAccountId()
+                                val fullHost = if (subDomainInput.isBlank() || subDomainInput == "@") zon.name else "${subDomainInput}.${zon.name}"
                                 val fullService = if (serviceUrlInput.startsWith("http://") || serviceUrlInput.startsWith("https://") || serviceUrlInput.startsWith("tcp://")) {
                                     serviceUrlInput
                                 } else {
                                     "$serviceType$serviceUrlInput"
                                 }
-                                statusMsg = "Memasang DNS & Ingress ke Cloudflare..."
+
+                                statusMsg = "Menyimpan ingress config & DNS CNAME ke Cloudflare..."
                                 try {
-                                    val res = ApiClient.api.addTunnelRoute(
-                                        email,
-                                        apiKey,
-                                        tun.id,
-                                        zon.id,
-                                        subDomainInput,
-                                        zon.name,
-                                        fullService
+                                    // 1. Simpan konfigurasi ingress ke tunnel
+                                    val ingressConfig = mapOf(
+                                        "config" to mapOf(
+                                            "ingress" to listOf(
+                                                mapOf("hostname" to fullHost, "service" to fullService),
+                                                mapOf("service" to "http_status:404")
+                                            )
+                                        )
                                     )
-                                    statusMsg = res.body()?.msg ?: "✅ Hostname berhasil diarahkan ke $fullService!"
-                                    subDomainInput = ""
+                                    ApiClient.api.updateTunnelConfigurations(accId, tun.id, ingressConfig)
+
+                                    // 2. Buat DNS CNAME otomatis: hostname -> {tunnel_id}.cfargotunnel.com
+                                    val dnsPayload = mapOf(
+                                        "type" to "CNAME",
+                                        "name" to fullHost,
+                                        "content" to "${tun.id}.cfargotunnel.com",
+                                        "ttl" to 1,
+                                        "proxied" to true
+                                    )
+                                    val dnsRes = ApiClient.api.createDns(zon.id, dnsPayload)
+
+                                    if (dnsRes.isSuccessful && dnsRes.body()?.success == true) {
+                                        statusMsg = "✅ Hostname '$fullHost' berhasil diarahkan ke $fullService!"
+                                        subDomainInput = ""
+                                    } else {
+                                        statusMsg = "Ingress tersimpan, DNS: ${dnsRes.body()?.errors?.firstOrNull()?.message ?: "Selesai"}"
+                                    }
                                 } catch (e: Exception) {
                                     statusMsg = "Error: ${e.message}"
                                 } finally {
@@ -334,7 +382,7 @@ fun TunnelScreen() {
             }
         }
 
-        // --- 5. DAFTAR TUNNEL CARD DENGAN INDIKATOR STATUS REAL-TIME ---
+        // --- 5. DAFTAR TUNNEL DENGAN INDIKATOR STATUS REAL-TIME ---
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -348,7 +396,7 @@ fun TunnelScreen() {
 
         if (tunnels.isEmpty() && !isLoading) {
             item {
-                Text("Belum ada tunnel. Buat baru di bagian atas.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                Text("Belum ada tunnel di akun ini. Buat baru di bagian atas.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             }
         }
 
@@ -359,9 +407,9 @@ fun TunnelScreen() {
             val isDegraded = rawStatus == "degraded"
 
             val statusColor = when {
-                isHealthy -> Color(0xFF16A34A) // Hijau Aktif
-                isDegraded -> Color(0xFFD97706) // Kuning Degraded
-                else -> Color(0xFFDC2626) // Merah Mati/Inactive
+                isHealthy -> Color(0xFF16A34A)
+                isDegraded -> Color(0xFFD97706)
+                else -> Color(0xFFDC2626)
             }
 
             val statusLabel = when {
@@ -395,7 +443,6 @@ fun TunnelScreen() {
                             )
                         }
 
-                        // BADGE STATUS AKTIF / MATI REAL-TIME
                         Surface(
                             shape = RoundedCornerShape(16.dp),
                             color = statusColor.copy(alpha = 0.15f),
@@ -444,12 +491,14 @@ fun TunnelScreen() {
                                 scope.launch {
                                     statusMsg = "Mengambil token untuk '${t.name}'..."
                                     try {
-                                        val res = ApiClient.api.getTunnelToken(email, apiKey, t.id)
-                                        if (res.isSuccessful && !res.body()?.token.isNullOrBlank()) {
-                                            activeToken = res.body()?.token ?: ""
+                                        val accId = CfAccountHelper.ensureAccountId()
+                                        val res = ApiClient.api.getTunnelToken(accId, t.id)
+                                        if (res.isSuccessful && res.body()?.success == true && !res.body()?.result.isNullOrBlank()) {
+                                            activeToken = res.body()?.result ?: ""
                                             statusMsg = "✅ Token tunnel '${t.name}' berhasil dimuat!"
                                         } else {
-                                            statusMsg = "Gagal mengambil token tunnel."
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "Gagal mengambil token"
+                                            statusMsg = "Error: $err"
                                         }
                                     } catch (e: Exception) {
                                         statusMsg = "Error: ${e.message}"
@@ -508,13 +557,15 @@ fun TunnelScreen() {
                     scope.launch {
                         statusMsg = "Menghapus tunnel '${target.name}'..."
                         try {
-                            val res = ApiClient.api.deleteTunnel(email, apiKey, target.id)
+                            val accId = CfAccountHelper.ensureAccountId()
+                            val res = ApiClient.api.deleteTunnel(accId, target.id)
                             if (res.isSuccessful && res.body()?.success == true) {
                                 statusMsg = "🗑 Tunnel '${target.name}' berhasil dihapus!"
                                 if (selectedTunnel?.id == target.id) selectedTunnel = null
                                 loadData()
                             } else {
-                                statusMsg = "Gagal: ${res.body()?.msg ?: res.message()}"
+                                val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                statusMsg = "Gagal: $err"
                             }
                         } catch (e: Exception) {
                             statusMsg = "Error: ${e.message}"

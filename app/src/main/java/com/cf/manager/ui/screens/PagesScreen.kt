@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import com.cf.manager.data.AppConfig
 import com.cf.manager.data.api.ApiClient
+import com.cf.manager.data.api.CfAccountHelper
 import com.cf.manager.data.local.AccountStorage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -84,13 +85,12 @@ fun PagesScreen() {
         scope.launch {
             isLoadingDomains = true
             try {
-                val res = ApiClient.api.listPagesCustomDomains(projectName, email, apiKey)
-                if (res.isSuccessful) {
-                    val body = res.body()
-                    val resultArr = body?.getAsJsonArray("result")
+                val accId = CfAccountHelper.ensureAccountId()
+                val res = ApiClient.api.listPagesCustomDomains(accId, projectName)
+                if (res.isSuccessful && res.body()?.success == true) {
+                    val resultArr = res.body()?.result ?: emptyList()
                     val list = mutableListOf<PagesCustomDomainItem>()
-                    resultArr?.forEach { item ->
-                        val obj = item.asJsonObject
+                    resultArr.forEach { obj ->
                         val id = obj.get("id")?.asString ?: ""
                         val name = obj.get("name")?.asString ?: ""
                         val status = obj.get("status")?.asString ?: "active"
@@ -173,19 +173,19 @@ fun PagesScreen() {
 
     fun loadProjects() {
         if (email.isBlank() || apiKey.isBlank()) {
-            statusMsg = "⚠️ Isi Email & API Key di tab Akun terlebih dahulu!"
+            statusMsg = "⚠️️ Isi Email & API Key di tab Akun terlebih dahulu!"
             return
         }
         scope.launch {
             isLoadingProjects = true
             try {
-                val res = ApiClient.api.listPagesProjects(email, apiKey)
-                if (res.isSuccessful) {
-                    val body = res.body()
-                    val resultList = body?.getAsJsonArray("result")
+                val accId = CfAccountHelper.ensureAccountId()
+                val res = ApiClient.api.listPagesProjects(accId)
+                if (res.isSuccessful && res.body()?.success == true) {
+                    val resultList = res.body()?.result ?: emptyList()
                     val list = mutableListOf<String>()
-                    resultList?.forEach {
-                        val name = it.asJsonObject.get("name")?.asString
+                    resultList.forEach {
+                        val name = it.get("name")?.asString
                         if (!name.isNullOrBlank()) list.add(name)
                     }
                     projects = list
@@ -196,7 +196,8 @@ fun PagesScreen() {
                         loadCustomDomains(selectedProjectForDomain)
                     }
                 } else {
-                    statusMsg = "Gagal memuat project: HTTP ${res.code()}"
+                    val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                    statusMsg = "Gagal memuat project: $err"
                 }
             } catch (e: Exception) {
                 statusMsg = "Error: ${e.message}"
@@ -232,8 +233,8 @@ fun PagesScreen() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("📄 Cloudflare Pages Studio", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("Kelola project statis & custom domain", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("📄 Cloudflare Pages (Direct)", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Kelola project statis & custom domain native", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                 }
                 IconButton(onClick = { loadProjects() }, enabled = !isLoadingProjects) {
                     Text(if (isLoadingProjects) "⏳" else "🔄")
@@ -279,7 +280,7 @@ fun PagesScreen() {
                             OutlinedTextField(
                                 value = customDomainInput,
                                 onValueChange = { customDomainInput = it.lowercase().trim() },
-                                label = { Text("Domain (cth: blog.rr.kg)") },
+                                label = { Text("Domain (cth: blog.domain.com)") },
                                 singleLine = true,
                                 modifier = Modifier.weight(1f)
                             )
@@ -292,15 +293,18 @@ fun PagesScreen() {
                                     }
                                     scope.launch {
                                         isAddingDomain = true
-                                        statusMsg = "Menghubungkan domain ke Pages '$target'..."
+                                        statusMsg = "Menghubungkan domain ke Pages '$target' di Cloudflare..."
                                         try {
-                                            val res = ApiClient.api.addPagesCustomDomain(target, email, apiKey, mapOf("domain" to customDomainInput))
-                                            if (res.isSuccessful) {
+                                            val accId = CfAccountHelper.ensureAccountId()
+                                            val payload = mapOf("name" to customDomainInput)
+                                            val res = ApiClient.api.addPagesCustomDomain(accId, target, payload)
+                                            if (res.isSuccessful && res.body()?.success == true) {
                                                 statusMsg = "✅ Custom domain $customDomainInput ditambahkan!"
                                                 customDomainInput = ""
                                                 loadCustomDomains(target)
                                             } else {
-                                                statusMsg = "Gagal: HTTP ${res.code()}"
+                                                val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                                statusMsg = "Gagal: $err"
                                             }
                                         } catch (e: Exception) {
                                             statusMsg = "Error: ${e.message}"
@@ -384,12 +388,14 @@ fun PagesScreen() {
                                                     scope.launch {
                                                         statusMsg = "Mencopot domain ${dom.name}..."
                                                         try {
-                                                            val res = ApiClient.api.deletePagesCustomDomain(selectedProjectForDomain, dom.name, email, apiKey)
-                                                            if (res.isSuccessful) {
+                                                            val accId = CfAccountHelper.ensureAccountId()
+                                                            val res = ApiClient.api.deletePagesCustomDomain(accId, selectedProjectForDomain, dom.name)
+                                                            if (res.isSuccessful && res.body()?.success == true) {
                                                                 statusMsg = "🗑 Domain ${dom.name} berhasil dicopot!"
                                                                 loadCustomDomains(selectedProjectForDomain)
                                                             } else {
-                                                                statusMsg = "Gagal copot: HTTP ${res.code()}"
+                                                                val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                                                statusMsg = "Gagal copot: $err"
                                                             }
                                                         } catch (e: Exception) {
                                                             statusMsg = "Error: ${e.message}"
@@ -475,7 +481,7 @@ fun PagesScreen() {
             }
         }
 
-        // --- SUB-TAB 1: FORMULIR BUAT PROJECT BARU ---
+        // --- SUB-TAB 1: FORMULIR BUAT PROJECT PAGES BARU ---
         if (selectedPagesTab == 1) {
             item {
                 Card(
@@ -485,10 +491,11 @@ fun PagesScreen() {
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Text("🚀 Buat Project Pages Baru", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Text("Upload folder situs web, pilih file, atau tarik template RAW", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        Text("Daftarkan nama project Pages langsung di Cloudflare", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
 
                         Spacer(modifier = Modifier.height(12.dp))
 
+                        // KOTAK DROP-DRAG & FOLDER PICKER ANDROID
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -506,7 +513,7 @@ fun PagesScreen() {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("📂 Ketuk untuk Pilih Folder Proyek Web (Drop/Drag)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                                 Spacer(modifier = Modifier.height(4.dp))
-                                Text("Otomatis membaca index.html & _worker.js di folder", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                                Text("Otomatis membaca nama folder & file aset", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                             }
                         }
 
@@ -517,53 +524,13 @@ fun PagesScreen() {
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            OutlinedTextField(
-                                value = newProjectName,
-                                onValueChange = {
-                                    newProjectName = it.lowercase().trim()
-                                    domainAvailableMsg = ""
-                                },
-                                label = { Text("Nama Project (.pages.dev)") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f)
-                            )
-                            OutlinedButton(
-                                onClick = {
-                                    if (newProjectName.isBlank()) return@OutlinedButton
-                                    scope.launch {
-                                        isCheckingDomain = true
-                                        domainAvailableMsg = "Memeriksa..."
-                                        try {
-                                            val res = ApiClient.api.checkSubdomain(newProjectName)
-                                            if (res.isSuccessful) {
-                                                val avail = res.body()?.get("available")?.asBoolean ?: false
-                                                domainAvailableMsg = if (avail) "✅ Tersedia!" else "❌ Terpakai!"
-                                            } else {
-                                                domainAvailableMsg = "Gagal cek"
-                                            }
-                                        } catch (e: Exception) {
-                                            domainAvailableMsg = "Error: ${e.message}"
-                                        } finally {
-                                            isCheckingDomain = false
-                                        }
-                                    }
-                                },
-                                enabled = !isCheckingDomain && newProjectName.isNotBlank(),
-                                contentPadding = PaddingValues(horizontal = 8.dp)
-                            ) {
-                                Text("Cek DoH")
-                            }
-                        }
-
-                        if (domainAvailableMsg.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(domainAvailableMsg, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                        }
+                        OutlinedTextField(
+                            value = newProjectName,
+                            onValueChange = { newProjectName = it.lowercase().trim() },
+                            label = { Text("Nama Project (.pages.dev)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
 
                         Spacer(modifier = Modifier.height(10.dp))
 
@@ -626,19 +593,6 @@ fun PagesScreen() {
                             textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace)
                         )
 
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        Text("_worker.js Function (Opsional / Backend SSR):", style = MaterialTheme.typography.labelMedium)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        OutlinedTextField(
-                            value = workerScript,
-                            onValueChange = { workerScript = it },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(110.dp),
-                            textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace)
-                        )
-
                         Spacer(modifier = Modifier.height(14.dp))
 
                         Button(
@@ -650,17 +604,22 @@ fun PagesScreen() {
                                 }
                                 scope.launch {
                                     isDeployingNew = true
-                                    statusMsg = "Mendeploy asset & binding JWT via Worker ke Cloudflare Pages..."
+                                    statusMsg = "Mendaftarkan project Pages '$target' di Cloudflare..."
                                     try {
-                                        val payload = mapOf("html" to htmlContent, "workerCode" to workerScript)
-                                        val res = ApiClient.api.quickDeployPages(target, email, apiKey, payload)
+                                        val accId = CfAccountHelper.ensureAccountId()
+                                        val payload = mapOf(
+                                            "name" to target,
+                                            "production_branch" to "main"
+                                        )
+                                        val res = ApiClient.api.createPagesProject(accId, payload)
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "🎉 Berhasil deploy Pages: https://$target.pages.dev"
+                                            statusMsg = "🎉 Berhasil membuat Pages: https://$target.pages.dev"
                                             newProjectName = ""
                                             selectedPagesTab = 0
                                             loadProjects()
                                         } else {
-                                            statusMsg = "Gagal deploy: HTTP ${res.code()}"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                            statusMsg = "Gagal: $err"
                                         }
                                     } catch (e: Exception) {
                                         statusMsg = "Error: ${e.message}"
@@ -672,7 +631,7 @@ fun PagesScreen() {
                             modifier = Modifier.fillMaxWidth(),
                             enabled = !isDeployingNew && newProjectName.isNotBlank()
                         ) {
-                            Text(if (isDeployingNew) "Mendeploy ke Pages..." else "🚀 Deploy Project Pages Baru")
+                            Text(if (isDeployingNew) "Mendaftarkan..." else "🚀 Buat Project Pages Sekarang")
                         }
                     }
                 }
@@ -700,20 +659,22 @@ fun PagesScreen() {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
             title = { Text("Hapus Project Pages?") },
-            text = { Text("Yakin ingin menghapus project '$projectToDelete' secara permanen?") },
+            text = { Text("Yakin ingin menghapus project '$projectToDelete' secara permanen dari Cloudflare?") },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteConfirm = false
                     scope.launch {
                         statusMsg = "Menghapus project '$projectToDelete'..."
                         try {
-                            val res = ApiClient.api.deletePagesProject(projectToDelete, email, apiKey)
-                            if (res.isSuccessful) {
+                            val accId = CfAccountHelper.ensureAccountId()
+                            val res = ApiClient.api.deletePagesProject(accId, projectToDelete)
+                            if (res.isSuccessful && res.body()?.success == true) {
                                 statusMsg = "🗑 Project '$projectToDelete' berhasil dihapus!"
                                 if (selectedProjectForDomain == projectToDelete) selectedProjectForDomain = ""
                                 loadProjects()
                             } else {
-                                statusMsg = "Gagal menghapus: HTTP ${res.code()}"
+                                val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                statusMsg = "Gagal menghapus: $err"
                             }
                         } catch (e: Exception) {
                             statusMsg = "Error: ${e.message}"

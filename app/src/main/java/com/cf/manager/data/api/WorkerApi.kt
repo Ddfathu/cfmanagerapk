@@ -9,299 +9,227 @@ import retrofit2.Response
 import retrofit2.http.*
 
 interface WorkerApi {
-    @FormUrlEncoded
-    @POST("list-workers")
-    suspend fun listWorkers(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String): Response<List<String>>
 
-    @FormUrlEncoded
-    @POST("get-worker-code")
+    // ACCOUNTS
+    @GET("accounts")
+    suspend fun listAccounts(): Response<CfApiResponse<List<CfAccountItem>>>
+
+    // WORKERS
+    @GET("accounts/{account_id}/workers/scripts")
+    suspend fun listWorkers(
+        @Path("account_id") accountId: String
+    ): Response<CfApiResponse<List<JsonObject>>>
+
+    @GET("accounts/{account_id}/workers/scripts/{script_name}")
     suspend fun getWorkerCode(
-        @Field("cf_email") email: String,
-        @Field("cf_api_key") apiKey: String,
-        @Field("target_worker") target: String
+        @Path("account_id") accountId: String,
+        @Path("script_name") scriptName: String
     ): Response<ResponseBody>
 
-    @FormUrlEncoded
-    @POST("deploy-worker")
-    suspend fun deployWorker(
-        @Field("cf_email") email: String,
-        @Field("cf_api_key") apiKey: String,
-        @Field("target_worker") target: String,
-        @Field("worker_code") code: String
-    ): Response<ApiResponse>
+    @Multipart
+    @PUT("accounts/{account_id}/workers/scripts/{script_name}")
+    suspend fun deployWorkerMultipart(
+        @Path("account_id") accountId: String,
+        @Path("script_name") scriptName: String,
+        @Part("metadata") metadata: RequestBody,
+        @Part script: MultipartBody.Part
+    ): Response<CfApiResponse<JsonObject>>
 
-    @FormUrlEncoded
-    @POST("delete-worker-cf")
-    suspend fun deleteWorker(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("target_worker") target: String): Response<ApiResponse>
+    @DELETE("accounts/{account_id}/workers/scripts/{script_name}")
+    suspend fun deleteWorker(
+        @Path("account_id") accountId: String,
+        @Path("script_name") scriptName: String
+    ): Response<CfApiResponse<JsonObject>>
 
-    // WORKER CUSTOM DOMAINS / ROUTES
-    @FormUrlEncoded
-    @POST("list-domains")
-    suspend fun listWorkerDomains(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String): Response<List<Any>>
+    // WORKER DOMAINS
+    @GET("accounts/{account_id}/workers/domains")
+    suspend fun listWorkerDomains(
+        @Path("account_id") accountId: String
+    ): Response<CfApiResponse<List<JsonObject>>>
 
-    @FormUrlEncoded
-    @POST("add-domain")
-    suspend fun addWorkerDomain(
-        @Field("cf_email") email: String,
-        @Field("cf_api_key") apiKey: String,
-        @Field("target_worker") target: String,
-        @Field("subdomain") subdomain: String,
-        @Field("main_domain") mainDomain: String,
-        @Field("zone_id") zoneId: String
-    ): Response<ApiResponse>
+    @PUT("accounts/{account_id}/workers/domains")
+    suspend fun putWorkerDomain(
+        @Path("account_id") accountId: String,
+        @Body payload: Map<String, String>
+    ): Response<CfApiResponse<JsonObject>>
 
-    @DELETE("delete-domain")
+    @DELETE("accounts/{account_id}/workers/domains/{domain_id}")
     suspend fun deleteWorkerDomain(
-        @Query("domain_id") domainId: String,
-        @Header("X-Auth-Email") email: String,
-        @Header("X-Auth-Key") apiKey: String
-    ): Response<JsonObject>
+        @Path("account_id") accountId: String,
+        @Path("domain_id") domainId: String
+    ): Response<CfApiResponse<JsonObject>>
 
-    // WORKER VARS & BINDINGS
-    @FormUrlEncoded
-    @POST("list-worker-vars")
-    suspend fun listWorkerVars(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("target_worker") target: String): Response<List<WorkerVarItem>>
+    // WORKER SECRETS & BINDINGS
+    @GET("accounts/{account_id}/workers/scripts/{script_name}/secrets")
+    suspend fun listWorkerSecrets(
+        @Path("account_id") accountId: String,
+        @Path("script_name") scriptName: String
+    ): Response<CfApiResponse<List<JsonObject>>>
 
-    @FormUrlEncoded
-    @POST("put-worker-var")
-    suspend fun putWorkerVar(
-        @Field("cf_email") email: String,
-        @Field("cf_api_key") apiKey: String,
-        @Field("target_worker") target: String,
-        @Field("var_name") name: String,
-        @Field("var_value") value: String,
-        @Field("var_type") type: String
-    ): Response<ApiResponse>
-
-    @FormUrlEncoded
-    @POST("put-worker-binding")
-    suspend fun putWorkerBinding(
-        @Field("cf_email") email: String,
-        @Field("cf_api_key") apiKey: String,
-        @Field("target_worker") target: String,
-        @Field("binding_type") type: String,
-        @Field("binding_name") name: String,
-        @Field("target_id") targetId: String
-    ): Response<ApiResponse>
-
-    @FormUrlEncoded
-    @POST("delete-worker-var")
-    suspend fun deleteWorkerVar(
-        @Field("cf_email") email: String,
-        @Field("cf_api_key") apiKey: String,
-        @Field("target_worker") target: String,
-        @Field("var_name") name: String
-    ): Response<ApiResponse>
-
-    // PAGES LENGKAP (PROJECTS & CUSTOM DOMAINS)
-    @GET("api/projects")
-    suspend fun listPagesProjects(@Header("X-Auth-Email") email: String, @Header("X-Auth-Key") apiKey: String): Response<JsonObject>
-
-    @GET("api/check-subdomain")
-    suspend fun checkSubdomain(@Query("name") name: String): Response<JsonObject>
-
-    @POST("api/quick-deploy-pages/{project}")
-    suspend fun quickDeployPages(
-        @Path("project") project: String,
-        @Header("X-Auth-Email") email: String,
-        @Header("X-Auth-Key") apiKey: String,
+    @PUT("accounts/{account_id}/workers/scripts/{script_name}/secrets")
+    suspend fun putWorkerSecret(
+        @Path("account_id") accountId: String,
+        @Path("script_name") scriptName: String,
         @Body payload: Map<String, String>
-    ): Response<ApiResponse>
+    ): Response<CfApiResponse<JsonObject>>
 
-    @GET("api/projects/{project}/domains")
-    suspend fun listPagesCustomDomains(
-        @Path("project") project: String,
-        @Header("X-Auth-Email") email: String,
-        @Header("X-Auth-Key") apiKey: String
-    ): Response<JsonObject>
-
-    @POST("api/projects/{project}/domains")
-    suspend fun addPagesCustomDomain(
-        @Path("project") project: String,
-        @Header("X-Auth-Email") email: String,
-        @Header("X-Auth-Key") apiKey: String,
-        @Body payload: Map<String, String>
-    ): Response<JsonObject>
-
-    @DELETE("api/projects/{project}/domains/{domain_name}")
-    suspend fun deletePagesCustomDomain(
-        @Path("project") project: String,
-        @Path("domain_name") domainName: String,
-        @Header("X-Auth-Email") email: String,
-        @Header("X-Auth-Key") apiKey: String
-    ): Response<JsonObject>
-
-    @DELETE("api/projects/{project}")
-    suspend fun deletePagesProject(
-        @Path("project") project: String,
-        @Header("X-Auth-Email") email: String,
-        @Header("X-Auth-Key") apiKey: String
-    ): Response<JsonObject>
+    @DELETE("accounts/{account_id}/workers/scripts/{script_name}/secrets/{secret_name}")
+    suspend fun deleteWorkerSecret(
+        @Path("account_id") accountId: String,
+        @Path("script_name") scriptName: String,
+        @Path("secret_name") secretName: String
+    ): Response<CfApiResponse<JsonObject>>
 
     // ZONES & DNS
-    @FormUrlEncoded
-    @POST("list-zones")
-    suspend fun listZones(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String): Response<List<ZoneItem>>
+    @GET("zones")
+    suspend fun listZones(
+        @Query("per_page") perPage: Int = 50
+    ): Response<CfApiResponse<List<ZoneItem>>>
 
-    @FormUrlEncoded
-    @POST("list-dns")
-    suspend fun listDns(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("zone_id") zoneId: String): Response<List<DnsRecordItem>>
+    @GET("zones/{zone_id}/dns_records")
+    suspend fun listDns(
+        @Path("zone_id") zoneId: String,
+        @Query("per_page") perPage: Int = 100
+    ): Response<CfApiResponse<List<DnsRecordItem>>>
 
-    @FormUrlEncoded
-    @POST("add-dns")
-    suspend fun addDns(
-        @Field("cf_email") email: String,
-        @Field("cf_api_key") apiKey: String,
-        @Field("zone_id") zoneId: String,
-        @Field("dns_type") type: String,
-        @Field("dns_name") name: String,
-        @Field("dns_content") content: String,
-        @Field("dns_ttl") ttl: Int,
-        @Field("dns_proxied") proxied: String
-    ): Response<ApiResponse>
+    @POST("zones/{zone_id}/dns_records")
+    suspend fun createDns(
+        @Path("zone_id") zoneId: String,
+        @Body payload: Map<String, Any>
+    ): Response<CfApiResponse<DnsRecordItem>>
 
-    @FormUrlEncoded
-    @POST("update-dns")
+    @PUT("zones/{zone_id}/dns_records/{record_id}")
     suspend fun updateDns(
-        @Field("cf_email") email: String,
-        @Field("cf_api_key") apiKey: String,
-        @Field("zone_id") zoneId: String,
-        @Field("record_id") recordId: String,
-        @Field("dns_type") type: String,
-        @Field("dns_name") name: String,
-        @Field("dns_content") content: String,
-        @Field("dns_ttl") ttl: Int,
-        @Field("dns_proxied") proxied: String
-    ): Response<ApiResponse>
+        @Path("zone_id") zoneId: String,
+        @Path("record_id") recordId: String,
+        @Body payload: Map<String, Any>
+    ): Response<CfApiResponse<DnsRecordItem>>
 
-    @FormUrlEncoded
-    @POST("delete-dns")
-    suspend fun deleteDns(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("zone_id") zoneId: String, @Field("record_id") recordId: String): Response<ApiResponse>
+    @DELETE("zones/{zone_id}/dns_records/{record_id}")
+    suspend fun deleteDns(
+        @Path("zone_id") zoneId: String,
+        @Path("record_id") recordId: String
+    ): Response<CfApiResponse<JsonObject>>
 
-    // SSL
-    @FormUrlEncoded
-    @POST("update-ssl-settings")
-    suspend fun updateSslSettings(
-        @Field("cf_email") email: String,
-        @Field("cf_api_key") apiKey: String,
-        @Field("zone_id") zoneId: String,
-        @Field("ssl_mode") sslMode: String,
-        @Field("always_use_https") alwaysHttps: String
-    ): Response<ApiResponse>
+    // SSL / TLS SETTINGS
+    @GET("zones/{zone_id}/settings/ssl")
+    suspend fun getSslSetting(
+        @Path("zone_id") zoneId: String
+    ): Response<CfApiResponse<JsonObject>>
 
-    @FormUrlEncoded
-    @POST("order-ca-cert")
-    suspend fun orderCaCert(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("zone_id") zoneId: String, @Field("ca_type") caType: String): Response<ApiResponse>
+    @PATCH("zones/{zone_id}/settings/ssl")
+    suspend fun updateSslSetting(
+        @Path("zone_id") zoneId: String,
+        @Body payload: Map<String, String>
+    ): Response<CfApiResponse<JsonObject>>
+
+    @PATCH("zones/{zone_id}/settings/always_use_https")
+    suspend fun updateAlwaysUseHttps(
+        @Path("zone_id") zoneId: String,
+        @Body payload: Map<String, String>
+    ): Response<CfApiResponse<JsonObject>>
 
     // TUNNEL
-    @FormUrlEncoded
-    @POST("list-tunnels")
-    suspend fun listTunnels(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String): Response<List<TunnelItem>>
+    @GET("accounts/{account_id}/cfd_tunnel")
+    suspend fun listTunnels(
+        @Path("account_id") accountId: String,
+        @Query("is_deleted") isDeleted: Boolean = false
+    ): Response<CfApiResponse<List<TunnelItem>>>
 
-    @FormUrlEncoded
-    @POST("create-tunnel")
-    suspend fun createTunnel(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("tunnel_name") name: String): Response<ApiResponse>
+    @POST("accounts/{account_id}/cfd_tunnel")
+    suspend fun createTunnel(
+        @Path("account_id") accountId: String,
+        @Body payload: Map<String, String>
+    ): Response<CfApiResponse<JsonObject>>
 
-    @FormUrlEncoded
-    @POST("get-tunnel-token")
-    suspend fun getTunnelToken(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("tunnel_id") tunnelId: String): Response<ApiResponse>
+    @GET("accounts/{account_id}/cfd_tunnel/{tunnel_id}/token")
+    suspend fun getTunnelToken(
+        @Path("account_id") accountId: String,
+        @Path("tunnel_id") tunnelId: String
+    ): Response<CfApiResponse<String>>
 
-    @FormUrlEncoded
-    @POST("delete-tunnel")
-    suspend fun deleteTunnel(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("tunnel_id") tunnelId: String): Response<ApiResponse>
+    @PUT("accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations")
+    suspend fun updateTunnelConfigurations(
+        @Path("account_id") accountId: String,
+        @Path("tunnel_id") tunnelId: String,
+        @Body payload: Map<String, Any>
+    ): Response<CfApiResponse<JsonObject>>
 
-    @FormUrlEncoded
-    @POST("add-tunnel-route")
-    suspend fun addTunnelRoute(
-        @Field("cf_email") email: String,
-        @Field("cf_api_key") apiKey: String,
-        @Field("tunnel_id") tunnelId: String,
-        @Field("zone_id") zoneId: String,
-        @Field("subdomain") subdomain: String,
-        @Field("main_domain") mainDomain: String,
-        @Field("service_url") serviceUrl: String
-    ): Response<ApiResponse>
+    @DELETE("accounts/{account_id}/cfd_tunnel/{tunnel_id}")
+    suspend fun deleteTunnel(
+        @Path("account_id") accountId: String,
+        @Path("tunnel_id") tunnelId: String
+    ): Response<CfApiResponse<JsonObject>>
+
+    // PAGES
+    @GET("accounts/{account_id}/pages/projects")
+    suspend fun listPagesProjects(
+        @Path("account_id") accountId: String
+    ): Response<CfApiResponse<List<JsonObject>>>
+
+    @POST("accounts/{account_id}/pages/projects")
+    suspend fun createPagesProject(
+        @Path("account_id") accountId: String,
+        @Body payload: Map<String, String>
+    ): Response<CfApiResponse<JsonObject>>
+
+    @DELETE("accounts/{account_id}/pages/projects/{project_name}")
+    suspend fun deletePagesProject(
+        @Path("account_id") accountId: String,
+        @Path("project_name") projectName: String
+    ): Response<CfApiResponse<JsonObject>>
+
+    @GET("accounts/{account_id}/pages/projects/{project_name}/domains")
+    suspend fun listPagesCustomDomains(
+        @Path("account_id") accountId: String,
+        @Path("project_name") projectName: String
+    ): Response<CfApiResponse<List<JsonObject>>>
+
+    @POST("accounts/{account_id}/pages/projects/{project_name}/domains")
+    suspend fun addPagesCustomDomain(
+        @Path("account_id") accountId: String,
+        @Path("project_name") projectName: String,
+        @Body payload: Map<String, String>
+    ): Response<CfApiResponse<JsonObject>>
+
+    @DELETE("accounts/{account_id}/pages/projects/{project_name}/domains/{domain_name}")
+    suspend fun deletePagesCustomDomain(
+        @Path("account_id") accountId: String,
+        @Path("project_name") projectName: String,
+        @Path("domain_name") domainName: String
+    ): Response<CfApiResponse<JsonObject>>
 
     // EMAIL ROUTING
-    @FormUrlEncoded
-    @POST("add-email-destination")
-    suspend fun addEmailDestination(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("email_address") address: String): Response<ApiResponse>
+    @GET("accounts/{account_id}/email/routing/addresses")
+    suspend fun listEmailDestinations(
+        @Path("account_id") accountId: String
+    ): Response<CfApiResponse<List<JsonObject>>>
 
-    @FormUrlEncoded
-    @POST("list-email-destinations")
-    suspend fun listEmailDestinations(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String): Response<List<Any>>
+    @POST("accounts/{account_id}/email/routing/addresses")
+    suspend fun createEmailDestination(
+        @Path("account_id") accountId: String,
+        @Body payload: Map<String, String>
+    ): Response<CfApiResponse<JsonObject>>
 
-    @DELETE("delete-email-destination")
+    @DELETE("accounts/{account_id}/email/routing/addresses/{address_id}")
     suspend fun deleteEmailDestination(
-        @Query("address_id") addressId: String,
-        @Header("X-Auth-Email") email: String,
-        @Header("X-Auth-Key") apiKey: String
-    ): Response<JsonObject>
+        @Path("account_id") accountId: String,
+        @Path("address_id") addressId: String
+    ): Response<CfApiResponse<JsonObject>>
 
-    @FormUrlEncoded
-    @POST("enable-email-routing")
-    suspend fun enableEmailRouting(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("zone_id") zoneId: String): Response<ApiResponse>
+    @POST("zones/{zone_id}/email/routing/enable")
+    suspend fun enableEmailRouting(
+        @Path("zone_id") zoneId: String
+    ): Response<CfApiResponse<JsonObject>>
 
-    @FormUrlEncoded
-    @POST("get-email-catchall")
-    suspend fun getEmailCatchAll(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("zone_id") zoneId: String): Response<JsonObject>
+    @GET("zones/{zone_id}/email/routing/rules/catch_all")
+    suspend fun getEmailCatchAll(
+        @Path("zone_id") zoneId: String
+    ): Response<CfApiResponse<JsonObject>>
 
-    @FormUrlEncoded
-    @POST("update-email-catchall")
+    @PUT("zones/{zone_id}/email/routing/rules/catch_all")
     suspend fun updateEmailCatchAll(
-        @Field("cf_email") email: String,
-        @Field("cf_api_key") apiKey: String,
-        @Field("zone_id") zoneId: String,
-        @Field("catchall_enabled") enabled: String,
-        @Field("catchall_action") action: String,
-        @Field("catchall_target") target: String
-    ): Response<ApiResponse>
-
-    // STORAGE
-    @FormUrlEncoded
-    @POST("list-kv-namespaces")
-    suspend fun listKvNamespaces(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String): Response<List<KvNamespaceItem>>
-
-    @FormUrlEncoded
-    @POST("put-kv-pair")
-    suspend fun putKvPair(
-        @Field("cf_email") email: String,
-        @Field("cf_api_key") apiKey: String,
-        @Field("namespace_id") nsId: String,
-        @Field("kv_key") key: String,
-        @Field("kv_value") value: String
-    ): Response<ApiResponse>
-
-    @FormUrlEncoded
-    @POST("list-r2-buckets")
-    suspend fun listR2Buckets(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String): Response<List<R2BucketItem>>
-
-    @FormUrlEncoded
-    @POST("list-r2-objects")
-    suspend fun listR2Objects(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("bucket_name") bucket: String): Response<List<R2ObjectItem>>
-
-    @Multipart
-    @POST("upload-r2-object")
-    suspend fun uploadR2Object(
-        @Part("cf_email") email: RequestBody,
-        @Part("cf_api_key") apiKey: RequestBody,
-        @Part("bucket_name") bucket: RequestBody,
-        @Part("object_key") key: RequestBody,
-        @Part file: MultipartBody.Part
-    ): Response<ApiResponse>
-
-    @FormUrlEncoded
-    @POST("read-r2-object-text")
-    suspend fun readR2ObjectText(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("bucket_name") bucket: String, @Field("object_key") key: String): Response<ApiResponse>
-
-    @FormUrlEncoded
-    @POST("list-d1-databases")
-    suspend fun listD1Databases(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String): Response<List<D1DatabaseItem>>
-
-    @FormUrlEncoded
-    @POST("execute-d1-query")
-    suspend fun executeD1Query(@Field("cf_email") email: String, @Field("cf_api_key") apiKey: String, @Field("database_id") dbId: String, @Field("sql_query") sql: String): Response<D1QueryResponse>
-
-    @GET("get-visitor-stats")
-    suspend fun getVisitorStats(): Response<VisitorStats>
+        @Path("zone_id") zoneId: String,
+        @Body payload: Map<String, Any>
+    ): Response<CfApiResponse<JsonObject>>
 }

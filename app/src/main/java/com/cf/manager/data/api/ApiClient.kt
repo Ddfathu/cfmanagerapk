@@ -1,46 +1,55 @@
 package com.cf.manager.data.api
 
 import com.cf.manager.data.AppConfig
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Response
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 object ApiClient {
-    private var currentBaseUrl = AppConfig.DEFAULT_BASE_URL
+    const val CLOUDFLARE_BASE_URL = "https://api.cloudflare.com/client/v4/"
 
-    private val okHttpClient: OkHttpClient by lazy {
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
+    private val authInterceptor = Interceptor { chain ->
+        val original = chain.request()
+        val builder = original.newBuilder()
+
+        // Suntikkan header otentikasi resmi Cloudflare v4 langsung
+        if (AppConfig.activeEmail.isNotBlank()) {
+            builder.header("X-Auth-Email", AppConfig.activeEmail)
         }
-        OkHttpClient.Builder()
-            .addInterceptor(logging)
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .build()
-    }
-
-    private var retrofit: Retrofit = buildRetrofit(currentBaseUrl)
-
-    private fun buildRetrofit(url: String): Retrofit {
-        val cleanUrl = if (url.endsWith("/")) url else "$url/"
-        return Retrofit.Builder()
-            .baseUrl(cleanUrl)
-            .client(okHttpClient)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-    }
-
-    var api: WorkerApi = retrofit.create(WorkerApi::class.java)
-        private set
-
-    fun updateBaseUrl(newUrl: String) {
-        if (newUrl.isNotBlank() && newUrl != currentBaseUrl) {
-            currentBaseUrl = newUrl
-            retrofit = buildRetrofit(newUrl)
-            api = retrofit.create(WorkerApi::class.java)
+        if (AppConfig.activeApiKey.isNotBlank()) {
+            if (AppConfig.activeApiKey.startsWith("Bearer ", ignoreCase = true)) {
+                builder.header("Authorization", AppConfig.activeApiKey)
+            } else {
+                builder.header("X-Auth-Key", AppConfig.activeApiKey)
+            }
         }
+
+        chain.proceed(builder.build())
     }
+
+    private val loggingInterceptor = HttpLoggingInterceptor().apply {
+        level = HttpLoggingInterceptor.Level.BODY
+    }
+
+    private val client = OkHttpClient.Builder()
+        .addInterceptor(authInterceptor)
+        .addInterceptor(loggingInterceptor)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    private val retrofit = Retrofit.Builder()
+        .baseUrl(CLOUDFLARE_BASE_URL)
+        .client(client)
+        .addConverterFactory(GsonConverterFactory.create())
+        .build()
+
+    val api: WorkerApi = retrofit.create(WorkerApi::class.java)
+
+    var activeAccountId: String = ""
 }

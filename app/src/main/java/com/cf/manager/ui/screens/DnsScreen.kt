@@ -58,15 +58,24 @@ fun DnsScreen() {
 
     val scope = rememberCoroutineScope()
 
+    fun resetForm() {
+        editingRecordId = null
+        selectedType = "A"
+        nameInput = ""
+        contentInput = ""
+        proxied = true
+    }
+
     fun loadRecords(zoneId: String) {
         scope.launch {
             isLoadingList = true
             try {
-                val res = ApiClient.api.listDns(email, apiKey, zoneId)
-                if (res.isSuccessful) {
-                    dnsList = res.body() ?: emptyList()
+                val res = ApiClient.api.listDns(zoneId)
+                if (res.isSuccessful && res.body()?.success == true) {
+                    dnsList = res.body()?.result ?: emptyList()
                 } else {
-                    statusMsg = "Gagal memuat DNS: HTTP ${res.code()}"
+                    val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                    statusMsg = "Gagal memuat DNS: $err"
                 }
             } catch (e: Exception) {
                 statusMsg = "Error: ${e.message}"
@@ -83,18 +92,21 @@ fun DnsScreen() {
         }
         scope.launch {
             try {
-                val res = ApiClient.api.listZones(email, apiKey)
-                if (res.isSuccessful) {
-                    val list = res.body() ?: emptyList()
+                val res = ApiClient.api.listZones()
+                if (res.isSuccessful && res.body()?.success == true) {
+                    val list = res.body()?.result ?: emptyList()
                     zones = list
                     if (list.isNotEmpty()) {
-                        if (selectedZone == null) {
+                        if (selectedZone == null || !list.any { it.id == selectedZone?.id }) {
                             selectedZone = list[0]
                             loadRecords(list[0].id)
                         }
                     } else {
-                        statusMsg = "Tidak ditemukan domain (zone) pada akun ini."
+                        statusMsg = "Tidak ditemukan domain (zone) pada akun Cloudflare ini."
                     }
+                } else {
+                    val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                    statusMsg = "Gagal mengambil daftar domain: $err"
                 }
             } catch (e: Exception) {
                 statusMsg = "Error: ${e.message}"
@@ -106,14 +118,6 @@ fun DnsScreen() {
         if (email.isNotEmpty() && apiKey.isNotEmpty()) {
             loadZones()
         }
-    }
-
-    fun resetForm() {
-        editingRecordId = null
-        selectedType = "A"
-        nameInput = ""
-        contentInput = ""
-        proxied = true
     }
 
     LazyColumn(
@@ -140,7 +144,6 @@ fun DnsScreen() {
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Dropdown Zone Selector (Jika akun punya banyak domain)
             if (zones.size > 1) {
                 ExposedDropdownMenuBox(
                     expanded = zoneExpanded,
@@ -173,11 +176,10 @@ fun DnsScreen() {
                         }
                     }
                 }
-                Spacer(modifier = Modifier.height(8.dp))
             }
         }
 
-        // --- 2. FORM TAMBAH / EDIT DNS RECORD ---
+        // --- 2. FORM TAMBAH / EDIT DNS RECORD DIRECT ---
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -196,7 +198,6 @@ fun DnsScreen() {
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Dropdown Tipe Record (A, CNAME, TXT, dll)
                         ExposedDropdownMenuBox(
                             expanded = typeExpanded,
                             onExpandedChange = { typeExpanded = !typeExpanded },
@@ -226,7 +227,6 @@ fun DnsScreen() {
                             }
                         }
 
-                        // Input Name / Subdomain
                         OutlinedTextField(
                             value = nameInput,
                             onValueChange = { nameInput = it.trim() },
@@ -239,7 +239,6 @@ fun DnsScreen() {
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Input Target Content
                     OutlinedTextField(
                         value = contentInput,
                         onValueChange = { contentInput = it.trim() },
@@ -251,28 +250,23 @@ fun DnsScreen() {
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Toggle Proxy Cloudflare (Orange Cloud)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
-                                checked = proxied,
-                                onCheckedChange = { proxied = it }
-                            )
-                            Text(
-                                text = if (proxied) "☁️ Proxy Aktif (Orange Cloud)" else "⚪ DNS Only (Bypass)",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
+                        Checkbox(
+                            checked = proxied,
+                            onCheckedChange = { proxied = it }
+                        )
+                        Text(
+                            text = if (proxied) "☁️ Proxy Aktif (Orange Cloud)" else "⚪ DNS Only (Bypass)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Tombol Simpan / Update & Batal
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -288,26 +282,29 @@ fun DnsScreen() {
                                     isSaving = true
                                     try {
                                         val isEdit = (editingRecordId != null)
-                                        statusMsg = if (isEdit) "Memperbarui DNS record..." else "Menambahkan DNS record..."
-                                        
+                                        statusMsg = if (isEdit) "Memperbarui record di Cloudflare..." else "Menambahkan record ke Cloudflare..."
+
+                                        val payload = mapOf(
+                                            "type" to selectedType,
+                                            "name" to nameInput,
+                                            "content" to contentInput,
+                                            "ttl" to ttlInput,
+                                            "proxied" to (if (selectedType == "A" || selectedType == "AAAA" || selectedType == "CNAME") proxied else false)
+                                        )
+
                                         val res = if (isEdit) {
-                                            ApiClient.api.updateDns(
-                                                email, apiKey, zone.id, editingRecordId!!,
-                                                selectedType, nameInput, contentInput, ttlInput, proxied.toString()
-                                            )
+                                            ApiClient.api.updateDns(zone.id, editingRecordId!!, payload)
                                         } else {
-                                            ApiClient.api.addDns(
-                                                email, apiKey, zone.id,
-                                                selectedType, nameInput, contentInput, ttlInput, proxied.toString()
-                                            )
+                                            ApiClient.api.createDns(zone.id, payload)
                                         }
 
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = res.body()?.msg ?: "Berhasil disimpan!"
+                                            statusMsg = "✅ Record DNS berhasil disimpan ke Cloudflare!"
                                             resetForm()
                                             loadRecords(zone.id)
                                         } else {
-                                            statusMsg = "Gagal: ${res.body()?.msg ?: res.message()}"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                            statusMsg = "Gagal: $err"
                                         }
                                     } catch (e: Exception) {
                                         statusMsg = "Error: ${e.message}"
@@ -332,7 +329,7 @@ fun DnsScreen() {
             }
         }
 
-        // --- 3. STATUS MESSAGE ---
+        // --- 3. STATUS BOX ---
         if (statusMsg.isNotEmpty()) {
             item {
                 Card(
@@ -348,7 +345,7 @@ fun DnsScreen() {
             }
         }
 
-        // --- 4. LIST DNS RECORDS ---
+        // --- 4. LIST DNS RECORD DARI CLOUDFLARE ---
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -362,11 +359,11 @@ fun DnsScreen() {
 
         if (dnsList.isEmpty() && !isLoadingList) {
             item {
-                Text("Belum ada DNS record atau data belum dimuat.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                Text("Belum ada record DNS di domain ini.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             }
         }
 
-        items(dnsList) { r ->
+        items(items = dnsList, key = { it.id }) { r ->
             val isBeingEdited = (editingRecordId == r.id)
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -411,7 +408,6 @@ fun DnsScreen() {
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Tombol Edit Record
                         IconButton(onClick = {
                             editingRecordId = r.id
                             selectedType = r.type
@@ -423,7 +419,6 @@ fun DnsScreen() {
                             Text("✏️")
                         }
 
-                        // Tombol Hapus Record
                         IconButton(onClick = {
                             recordToDelete = r
                             showDeleteDialog = true
@@ -436,13 +431,13 @@ fun DnsScreen() {
         }
     }
 
-    // --- DIALOG KONFIRMASI HAPUS RECORD ---
+    // --- DIALOG KONFIRMASI HAPUS DIRECT ---
     if (showDeleteDialog && recordToDelete != null) {
         val target = recordToDelete!!
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text("Hapus DNS Record?") },
-            text = { Text("Yakin ingin menghapus record [${target.type}] ${target.name} (${target.content})?") },
+            text = { Text("Yakin ingin menghapus record [${target.type}] ${target.name} dari Cloudflare?") },
             confirmButton = {
                 TextButton(onClick = {
                     val zone = selectedZone
@@ -451,13 +446,14 @@ fun DnsScreen() {
                         scope.launch {
                             statusMsg = "Menghapus record ${target.name}..."
                             try {
-                                val res = ApiClient.api.deleteDns(email, apiKey, zone.id, target.id)
+                                val res = ApiClient.api.deleteDns(zone.id, target.id)
                                 if (res.isSuccessful && res.body()?.success == true) {
-                                    statusMsg = "🗑 Record berhasil dihapus!"
+                                    statusMsg = "🗑 Record berhasil dihapus dari Cloudflare!"
                                     if (editingRecordId == target.id) resetForm()
                                     loadRecords(zone.id)
                                 } else {
-                                    statusMsg = "Gagal: ${res.body()?.msg ?: res.message()}"
+                                    val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                    statusMsg = "Gagal: $err"
                                 }
                             } catch (e: Exception) {
                                 statusMsg = "Error: ${e.message}"

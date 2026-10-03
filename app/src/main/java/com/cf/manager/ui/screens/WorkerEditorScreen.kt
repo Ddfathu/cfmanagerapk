@@ -14,11 +14,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.cf.manager.data.AppConfig
 import com.cf.manager.data.api.ApiClient
+import com.cf.manager.data.api.CfAccountHelper
 import com.cf.manager.data.local.AccountStorage
 import com.cf.manager.data.model.ZoneItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URL
 
 data class WorkerDomainItem(
@@ -38,27 +42,26 @@ fun WorkerEditorScreen() {
     val email = AppConfig.activeEmail.ifBlank { currAcc?.email ?: "" }
     val apiKey = AppConfig.activeApiKey.ifBlank { currAcc?.apiKey ?: "" }
 
-    // Sub-tab: 0 = Daftar & Edit Worker, 1 = Buat Worker Baru
+    // 0 = Daftar & Edit, 1 = Buat Baru
     var selectedWorkerTab by remember { mutableStateOf(0) }
 
     var workerList by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoadingList by remember { mutableStateOf(false) }
     var statusMsg by remember { mutableStateOf("") }
 
-    // State untuk Form Edit Worker
+    // State Edit Worker
     var editingWorkerName by remember { mutableStateOf<String?>(null) }
     var editCodeInput by remember { mutableStateOf("") }
-    var isFetchingEditCode by remember { mutableStateOf(false) }
     var isUpdatingWorker by remember { mutableStateOf(false) }
 
-    // State untuk Form Buat Worker Baru
+    // State Buat Worker Baru
     var newWorkerName by remember { mutableStateOf("") }
-    var newWorkerCode by remember { mutableStateOf("export default {\n  async fetch(request, env) {\n    return new Response(\"Hello from new CF Worker!\");\n  }\n};") }
+    var newWorkerCode by remember { mutableStateOf("export default {\n  async fetch(request, env) {\n    return new Response(\"Hello from Native CF Worker!\");\n  }\n};") }
     var newRawUrl by remember { mutableStateOf("https://raw.ddfathu.cc.cd/raw/4qmj2d/nauticamodv8") }
     var isFetchingNewRaw by remember { mutableStateOf(false) }
     var isCreatingWorker by remember { mutableStateOf(false) }
 
-    // State Domain / Rute Worker
+    // State Custom Domain Worker
     var zones by remember { mutableStateOf<List<ZoneItem>>(emptyList()) }
     var selectedZone by remember { mutableStateOf<ZoneItem?>(null) }
     var zoneExpanded by remember { mutableStateOf(false) }
@@ -67,23 +70,48 @@ fun WorkerEditorScreen() {
     var isAddingDomain by remember { mutableStateOf(false) }
     var activeDomainWorkerTarget by remember { mutableStateOf("") }
 
-    // State Dialog Konfirmasi Hapus
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var workerToDelete by remember { mutableStateOf("") }
 
     val scope = rememberCoroutineScope()
 
+    // Helper untuk Deploy Worker Modul ES ke Cloudflare API v4
+    suspend fun deployScriptDirect(target: String, code: String): Boolean {
+        val accId = CfAccountHelper.ensureAccountId()
+        if (accId.isBlank()) {
+            statusMsg = "Gagal mendeteksi Account ID!"
+            return false
+        }
+
+        val metadataJson = """
+            {
+                "main_module": "index.js",
+                "compatibility_date": "2024-01-01"
+            }
+        """.trimIndent()
+
+        val metaPart = metadataJson.toRequestBody("application/json".toMediaTypeOrNull())
+        val scriptPart = MultipartBody.Part.createFormData(
+            "index.js",
+            "index.js",
+            code.toRequestBody("application/javascript+module".toMediaTypeOrNull())
+        )
+
+        val res = ApiClient.api.deployWorkerMultipart(accId, target, metaPart, scriptPart)
+        return res.isSuccessful && res.body()?.success == true
+    }
+
     fun loadWorkerDomains() {
         scope.launch {
             try {
-                val res = ApiClient.api.listWorkerDomains(email, apiKey)
-                if (res.isSuccessful) {
-                    val rawList = res.body() ?: emptyList()
+                val accId = CfAccountHelper.ensureAccountId()
+                val res = ApiClient.api.listWorkerDomains(accId)
+                if (res.isSuccessful && res.body()?.success == true) {
+                    val rawList = res.body()?.result ?: emptyList()
                     val parsed = rawList.mapNotNull { item ->
-                        val m = item as? Map<*, *>
-                        val id = m?.get("id")?.toString() ?: return@mapNotNull null
-                        val host = m["hostname"]?.toString() ?: return@mapNotNull null
-                        val srv = m["service"]?.toString() ?: ""
+                        val id = item.get("id")?.asString ?: return@mapNotNull null
+                        val host = item.get("hostname")?.asString ?: return@mapNotNull null
+                        val srv = item.get("service")?.asString ?: ""
                         WorkerDomainItem(id, host, srv)
                     }
                     workerDomains = parsed
@@ -100,16 +128,28 @@ fun WorkerEditorScreen() {
         scope.launch {
             isLoadingList = true
             try {
-                val res = ApiClient.api.listWorkers(email, apiKey)
-                if (res.isSuccessful) {
-                    workerList = res.body() ?: emptyList()
-                } else {
-                    statusMsg = "Gagal memuat worker: HTTP ${res.code()}"
+                val accId = CfAccountHelper.ensureAccountId()
+                if (accId.isBlank()) {
+                    statusMsg = "Gagal membaca data akun Cloudflare!"
+                    return@launch
                 }
 
-                val zRes = ApiClient.api.listZones(email, apiKey)
-                if (zRes.isSuccessful) {
-                    zones = zRes.body() ?: emptyList()
+                // Ambil daftar Worker langsung dari Cloudflare API v4
+                val res = ApiClient.api.listWorkers(accId)
+                if (res.isSuccessful && res.body()?.success == true) {
+                    val items = res.body()?.result ?: emptyList()
+                    val names = items.mapNotNull { it.get("id")?.asString }
+                    workerList = names
+                } else {
+                    val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                    statusMsg = "Gagal memuat worker: $err"
+                }
+
+                // Ambil daftar Zone Domain
+                val zRes = ApiClient.api.listZones()
+                if (zRes.isSuccessful && zRes.body()?.success == true) {
+                    val zList = zRes.body()?.result ?: emptyList()
+                    zones = zList
                     if (zones.isNotEmpty() && selectedZone == null) {
                         selectedZone = zones[0]
                     }
@@ -143,8 +183,8 @@ fun WorkerEditorScreen() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("⚡ Cloudflare Workers", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("Kelola script worker dan rute domain", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("⚡ Cloudflare Workers (Direct)", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Kelola script worker dan rute domain native", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                 }
                 IconButton(onClick = { loadWorkers() }, enabled = !isLoadingList) {
                     Text(if (isLoadingList) "⏳" else "🔄")
@@ -153,7 +193,6 @@ fun WorkerEditorScreen() {
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // SUB-TAB SWITCHER MANDIRI (Daftar & Edit VS Buat Baru)
             PrimaryTabRow(selectedTabIndex = selectedWorkerTab) {
                 Tab(
                     selected = selectedWorkerTab == 0,
@@ -171,9 +210,9 @@ fun WorkerEditorScreen() {
             }
         }
 
-        // --- SUB-TAB 0: DAFTAR & EDIT WORKER YANG SUDAH ADA ---
+        // --- SUB-TAB 0: DAFTAR & EDIT WORKER AKTIF ---
         if (selectedWorkerTab == 0) {
-            // MODE SEDANG EDIT SATU WORKER
+            // FORM EDIT SCRIPT WORKER
             if (editingWorkerName != null) {
                 item {
                     Card(
@@ -189,13 +228,13 @@ fun WorkerEditorScreen() {
                             ) {
                                 Text("✏️ Edit Worker: $editingWorkerName", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                 TextButton(onClick = { editingWorkerName = null }) {
-                                    Text("✖ Tutup Editor")
+                                    Text("✖ Tutup")
                                 }
                             }
 
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            Text("Script JavaScript (Worker Engine):", style = MaterialTheme.typography.labelMedium)
+                            Text("Script JavaScript (Direct Deploy):", style = MaterialTheme.typography.labelMedium)
                             Spacer(modifier = Modifier.height(4.dp))
                             OutlinedTextField(
                                 value = editCodeInput,
@@ -214,15 +253,15 @@ fun WorkerEditorScreen() {
                                         val target = editingWorkerName ?: return@Button
                                         scope.launch {
                                             isUpdatingWorker = true
-                                            statusMsg = "Memperbarui kode worker '$target'..."
+                                            statusMsg = "Menyimpan script '$target' langsung ke Cloudflare..."
                                             try {
-                                                val res = ApiClient.api.deployWorker(email, apiKey, target, editCodeInput)
-                                                if (res.isSuccessful && res.body()?.success == true) {
+                                                val ok = deployScriptDirect(target, editCodeInput)
+                                                if (ok) {
                                                     statusMsg = "🎉 Berhasil memperbarui worker: $target"
                                                     editingWorkerName = null
                                                     loadWorkers()
                                                 } else {
-                                                    statusMsg = "Gagal: ${res.body()?.msg ?: res.message()}"
+                                                    statusMsg = "Gagal memperbarui worker. Periksa script sintaks!"
                                                 }
                                             } catch (e: Exception) {
                                                 statusMsg = "Error: ${e.message}"
@@ -246,7 +285,7 @@ fun WorkerEditorScreen() {
                 }
             }
 
-            // SECTION PASANG DOMAIN KE WORKER
+            // FORM HUBUNGKAN CUSTOM DOMAIN KE WORKER
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -260,7 +299,7 @@ fun WorkerEditorScreen() {
                         OutlinedTextField(
                             value = activeDomainWorkerTarget,
                             onValueChange = { activeDomainWorkerTarget = it.lowercase().trim() },
-                            label = { Text("Worker Target (Ketik / Klik nama worker di bawah)") },
+                            label = { Text("Worker Target (Ketik / Klik 'Rute' di bawah)") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -330,13 +369,24 @@ fun WorkerEditorScreen() {
                                 }
                                 scope.launch {
                                     isAddingDomain = true
-                                    statusMsg = "Menghubungkan domain ke Worker..."
+                                    statusMsg = "Menghubungkan domain ke Worker di Cloudflare..."
                                     try {
-                                        val sub = if (customSubdomainInput == "@") "" else customSubdomainInput
-                                        val res = ApiClient.api.addWorkerDomain(email, apiKey, target, sub, z.name, z.id)
-                                        statusMsg = res.body()?.msg ?: "Domain rute berhasil dipasang!"
-                                        customSubdomainInput = ""
-                                        loadWorkerDomains()
+                                        val accId = CfAccountHelper.ensureAccountId()
+                                        val fullHost = if (customSubdomainInput.isBlank() || customSubdomainInput == "@") z.name else "${customSubdomainInput}.${z.name}"
+                                        val payload = mapOf(
+                                            "hostname" to fullHost,
+                                            "service" to target,
+                                            "zone_id" to z.id
+                                        )
+                                        val res = ApiClient.api.putWorkerDomain(accId, payload)
+                                        if (res.isSuccessful && res.body()?.success == true) {
+                                            statusMsg = "✅ Domain $fullHost terhubung ke $target!"
+                                            customSubdomainInput = ""
+                                            loadWorkerDomains()
+                                        } else {
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                            statusMsg = "Gagal pasang domain: $err"
+                                        }
                                     } catch (e: Exception) {
                                         statusMsg = "Error: ${e.message}"
                                     } finally {
@@ -353,14 +403,14 @@ fun WorkerEditorScreen() {
                 }
             }
 
-            // LIST KARTU WORKER YANG SUDAH ADA
+            // LIST KARTU WORKER AKTIF
             item {
                 Text("Daftar Worker Aktif (${workerList.size}):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             }
 
             if (workerList.isEmpty() && !isLoadingList) {
                 item {
-                    Text("Belum ada worker di akun ini. Pindah ke tab '➕ Buat Worker Baru' di atas untuk membuat!", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("Belum ada worker di akun ini. Buat baru di tab sebelah!", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                 }
             }
 
@@ -397,13 +447,13 @@ fun WorkerEditorScreen() {
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            // Tombol Edit Script
                             Button(
                                 onClick = {
                                     scope.launch {
-                                        statusMsg = "Mengambil kode worker '$wName'..."
+                                        statusMsg = "Mengambil kode worker '$wName' dari Cloudflare..."
                                         try {
-                                            val call = ApiClient.api.getWorkerCode(email, apiKey, wName)
+                                            val accId = CfAccountHelper.ensureAccountId()
+                                            val call = ApiClient.api.getWorkerCode(accId, wName)
                                             if (call.isSuccessful) {
                                                 editCodeInput = call.body()?.string() ?: ""
                                                 editingWorkerName = wName
@@ -422,7 +472,6 @@ fun WorkerEditorScreen() {
                                 Text("✏️ Edit Script")
                             }
 
-                            // Tombol Pilih untuk Rute Domain
                             OutlinedButton(
                                 onClick = {
                                     activeDomainWorkerTarget = wName
@@ -433,7 +482,6 @@ fun WorkerEditorScreen() {
                                 Text("🌐 Rute")
                             }
 
-                            // Tombol Hapus Worker
                             Button(
                                 onClick = {
                                     workerToDelete = wName
@@ -450,7 +498,7 @@ fun WorkerEditorScreen() {
             }
         }
 
-        // --- SUB-TAB 1: FORM BUAT WORKER BARU DARI NOL ---
+        // --- SUB-TAB 1: FORM BUAT WORKER BARU ---
         if (selectedWorkerTab == 1) {
             item {
                 Card(
@@ -460,7 +508,7 @@ fun WorkerEditorScreen() {
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Text("🚀 Formulir Buat Worker Baru", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Text("Isi nama dan script worker yang ingin kamu pasang", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        Text("Deploy script native langsung ke edge Cloudflare", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
 
                         Spacer(modifier = Modifier.height(12.dp))
 
@@ -474,7 +522,6 @@ fun WorkerEditorScreen() {
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // Ambil template RAW dari URL
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -535,16 +582,16 @@ fun WorkerEditorScreen() {
                                 }
                                 scope.launch {
                                     isCreatingWorker = true
-                                    statusMsg = "Mendeploy worker baru '$target' ke Cloudflare..."
+                                    statusMsg = "Mendeploy worker '$target' langsung ke Cloudflare..."
                                     try {
-                                        val res = ApiClient.api.deployWorker(email, apiKey, target, newWorkerCode)
-                                        if (res.isSuccessful && res.body()?.success == true) {
+                                        val ok = deployScriptDirect(target, newWorkerCode)
+                                        if (ok) {
                                             statusMsg = "🎉 Berhasil membuat worker baru: $target!"
                                             newWorkerName = ""
-                                            selectedWorkerTab = 0 // Pindah ke tab daftar worker
+                                            selectedWorkerTab = 0
                                             loadWorkers()
                                         } else {
-                                            statusMsg = "Gagal deploy: ${res.body()?.msg ?: res.message()}"
+                                            statusMsg = "Gagal mendeploy worker ke Cloudflare."
                                         }
                                     } catch (e: Exception) {
                                         statusMsg = "Error: ${e.message}"
@@ -580,7 +627,7 @@ fun WorkerEditorScreen() {
         }
     }
 
-    // --- DIALOG KONFIRMASI HAPUS WORKER ---
+    // --- DIALOG KONFIRMASI HAPUS WORKER DIRECT ---
     if (showDeleteConfirm && workerToDelete.isNotBlank()) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
@@ -592,13 +639,15 @@ fun WorkerEditorScreen() {
                     scope.launch {
                         statusMsg = "Menghapus worker '$workerToDelete'..."
                         try {
-                            val res = ApiClient.api.deleteWorker(email, apiKey, workerToDelete)
+                            val accId = CfAccountHelper.ensureAccountId()
+                            val res = ApiClient.api.deleteWorker(accId, workerToDelete)
                             if (res.isSuccessful && res.body()?.success == true) {
                                 statusMsg = "🗑 Worker '$workerToDelete' berhasil dihapus!"
                                 if (editingWorkerName == workerToDelete) editingWorkerName = null
                                 loadWorkers()
                             } else {
-                                statusMsg = "Gagal menghapus: ${res.body()?.msg ?: res.message()}"
+                                val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                statusMsg = "Gagal menghapus: $err"
                             }
                         } catch (e: Exception) {
                             statusMsg = "Error: ${e.message}"
