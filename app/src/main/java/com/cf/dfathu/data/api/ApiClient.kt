@@ -1,8 +1,8 @@
-package com.cf.manager.data.api
+package com.cf.dfathu.data.api
 
-import com.cf.manager.data.AppConfig
-import com.cf.manager.data.model.DnsRecordItem
-import com.cf.manager.data.model.ZoneItem
+import com.cf.dfathu.data.AppConfig
+import com.cf.dfathu.data.model.DnsRecordItem
+import com.cf.dfathu.data.model.ZoneItem
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import okhttp3.Interceptor

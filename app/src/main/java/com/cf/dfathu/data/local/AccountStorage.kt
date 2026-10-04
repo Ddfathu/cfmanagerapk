@@ -1,8 +1,8 @@
-package com.cf.manager.data.local
+package com.cf.dfathu.data.local
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.cf.manager.data.model.CfAccount
+import com.cf.dfathu.data.model.CfAccount
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 

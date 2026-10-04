@@ -1,4 +1,4 @@
-package com.cf.manager.data.local
+package com.cf.dfathu.data.local
 
 import android.content.Context
 import android.content.SharedPreferences

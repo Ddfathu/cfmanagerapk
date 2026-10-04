@@ -4,15 +4,15 @@ plugins {
 }
 
 android {
-    namespace = "com.cf.manager"
+    namespace = "com.cf.dfathu"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.cf.app"
+        applicationId = "com.cf.dfathu"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.1"
     }
 
     buildTypes {

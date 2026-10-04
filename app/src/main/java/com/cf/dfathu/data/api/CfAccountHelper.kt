@@ -1,4 +1,4 @@
-package com.cf.manager.data.api
+package com.cf.dfathu.data.api
 
 object CfAccountHelper {
     private var cachedAccountId: String? = null

@@ -1,4 +1,4 @@
-package com.cf.manager.data
+package com.cf.dfathu.data
 
 object AppConfig {
     var activeEmail: String = ""

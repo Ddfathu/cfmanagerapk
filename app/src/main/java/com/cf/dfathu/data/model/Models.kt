@@ -1,4 +1,4 @@
-package com.cf.manager.data.model
+package com.cf.dfathu.data.model
 
 import com.google.gson.annotations.SerializedName
 

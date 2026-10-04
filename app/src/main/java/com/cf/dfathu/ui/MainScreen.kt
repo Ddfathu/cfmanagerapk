@@ -1,4 +1,4 @@
-package com.cf.manager.ui
+package com.cf.dfathu.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,12 +18,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.cf.manager.data.AppConfig
-import com.cf.manager.data.api.ApiClient
-import com.cf.manager.data.api.CfAccountHelper
-import com.cf.manager.data.local.AccountStorage
-import com.cf.manager.data.model.CfAccount
-import com.cf.manager.ui.screens.*
+import com.cf.dfathu.data.AppConfig
+import com.cf.dfathu.data.api.ApiClient
+import com.cf.dfathu.data.api.CfAccountHelper
+import com.cf.dfathu.data.local.AccountStorage
+import com.cf.dfathu.data.model.CfAccount
+import com.cf.dfathu.ui.screens.*
 import kotlinx.coroutines.launch
 
 enum class MainCategory(val label: String, val icon: String) {

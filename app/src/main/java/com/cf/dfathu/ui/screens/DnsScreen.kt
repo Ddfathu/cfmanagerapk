@@ -1,4 +1,4 @@
-package com.cf.manager.ui.screens
+package com.cf.dfathu.ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,11 +12,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.cf.manager.data.AppConfig
-import com.cf.manager.data.api.ApiClient
-import com.cf.manager.data.local.AccountStorage
-import com.cf.manager.data.model.DnsRecordItem
-import com.cf.manager.data.model.ZoneItem
+import com.cf.dfathu.data.AppConfig
+import com.cf.dfathu.data.api.ApiClient
+import com.cf.dfathu.data.local.AccountStorage
+import com.cf.dfathu.data.model.DnsRecordItem
+import com.cf.dfathu.data.model.ZoneItem
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)

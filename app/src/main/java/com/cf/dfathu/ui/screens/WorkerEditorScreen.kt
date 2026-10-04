@@ -1,4 +1,4 @@
-package com.cf.manager.ui.screens
+package com.cf.dfathu.ui.screens
 
 import android.content.Intent
 import android.net.Uri
@@ -22,13 +22,13 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.cf.manager.data.AppConfig
-import com.cf.manager.data.BindingType
-import com.cf.manager.data.DetectedBinding
-import com.cf.manager.data.SmartWranglerParser
-import com.cf.manager.data.api.ApiClient
-import com.cf.manager.data.api.CfAccountHelper
-import com.cf.manager.data.local.AccountStorage
+import com.cf.dfathu.data.AppConfig
+import com.cf.dfathu.data.BindingType
+import com.cf.dfathu.data.DetectedBinding
+import com.cf.dfathu.data.SmartWranglerParser
+import com.cf.dfathu.data.api.ApiClient
+import com.cf.dfathu.data.api.CfAccountHelper
+import com.cf.dfathu.data.local.AccountStorage
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
