@@ -1,5 +1,6 @@
 package com.cf.manager.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -8,6 +9,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -16,7 +18,6 @@ import com.cf.manager.data.api.ApiClient
 import com.cf.manager.data.api.CfAccountHelper
 import com.cf.manager.data.local.AccountStorage
 import com.cf.manager.data.model.ZoneItem
-import com.google.gson.JsonObject
 import kotlinx.coroutines.launch
 
 data class EmailDestItem(val id: String, val email: String, val verified: Boolean)
@@ -40,6 +41,9 @@ fun EmailScreen() {
     var selectedZone by remember { mutableStateOf<ZoneItem?>(null) }
     var zoneExpanded by remember { mutableStateOf(false) }
 
+    // Worker List untuk opsi "Send to Worker"
+    var workerList by remember { mutableStateOf<List<String>>(emptyList()) }
+
     // Destinations
     var destinations by remember { mutableStateOf<List<EmailDestItem>>(emptyList()) }
     var newDestEmail by remember { mutableStateOf("") }
@@ -50,9 +54,19 @@ fun EmailScreen() {
     var selectedForwardDest by remember { mutableStateOf("") }
     var destDropdownExpanded by remember { mutableStateOf(false) }
 
-    // Catch-All
+    // Catch-All (Sesuai SC Web: forward ke Email ATAU worker)
     var catchAllEnabled by remember { mutableStateOf(false) }
+    var catchAllActionType by remember { mutableStateOf("forward") } // "forward" atau "worker"
+    var catchAllActionExpanded by remember { mutableStateOf(false) }
     var catchAllForwardTo by remember { mutableStateOf("") }
+    var catchAllForwardDropdownExpanded by remember { mutableStateOf(false) }
+    var catchAllWorkerTarget by remember { mutableStateOf("") }
+    var catchAllWorkerDropdownExpanded by remember { mutableStateOf(false) }
+
+    // Status MX Routing Zone (Sama persis dengan SC Web)
+    var zoneMxStatus by remember { mutableStateOf("") } // "ready", "needs_setup", "unconfigured", dll
+    var isCheckingMxStatus by remember { mutableStateOf(false) }
+    var isSettingUpMx by remember { mutableStateOf(false) }
 
     var statusMsg by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
@@ -74,11 +88,74 @@ fun EmailScreen() {
                         EmailDestItem(id, emailAddr, verified)
                     }
                     destinations = list
-                    if (selectedForwardDest.isBlank() && list.isNotEmpty()) {
-                        selectedForwardDest = list[0].email
+                    if (selectedForwardDest.isBlank() && list.any { it.verified }) {
+                        selectedForwardDest = list.first { it.verified }.email
+                    }
+                    if (catchAllForwardTo.isBlank() && list.any { it.verified }) {
+                        catchAllForwardTo = list.first { it.verified }.email
                     }
                 }
             } catch (_: Exception) {}
+        }
+    }
+
+    fun loadWorkersList() {
+        scope.launch {
+            try {
+                val accId = CfAccountHelper.ensureAccountId()
+                val res = ApiClient.api.listWorkers(accId)
+                if (res.isSuccessful && res.body()?.success == true) {
+                    val list = res.body()?.result?.mapNotNull { it.get("id")?.asString } ?: emptyList()
+                    workerList = list
+                    if (catchAllWorkerTarget.isBlank() && list.isNotEmpty()) {
+                        catchAllWorkerTarget = list[0]
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    // Cek Status MX Records Domain (Logika SC Web get-email-settings)
+    fun checkDomainMxStatus(zoneId: String) {
+        scope.launch {
+            isCheckingMxStatus = true
+            try {
+                val res = ApiClient.api.getEmailRoutingSettings(zoneId)
+                if (res.isSuccessful && res.body()?.success == true) {
+                    val resElement = res.body()?.result
+                    val resObj = if (resElement?.isJsonObject == true) resElement.asJsonObject else null
+                    val status = resObj?.get("status")?.asString ?: "unconfigured"
+                    zoneMxStatus = status
+                } else {
+                    zoneMxStatus = "needs_setup"
+                }
+            } catch (_: Exception) {
+                zoneMxStatus = "unknown"
+            } finally {
+                isCheckingMxStatus = false
+            }
+        }
+    }
+
+    // Setup Otomatis DNS MX & SPF Records (Logika SC Web enable-email-routing)
+    fun setupCloudflareMxAutomatically(zoneId: String) {
+        scope.launch {
+            isSettingUpMx = true
+            statusMsg = "Memasang MX & SPF Cloudflare otomatis..."
+            try {
+                val res = ApiClient.api.enableEmailRouting(zoneId)
+                if (res.isSuccessful && res.body()?.success == true) {
+                    statusMsg = "✅ Sukses konfigurasi MX/SPF Email Routing otomatis!"
+                    checkDomainMxStatus(zoneId)
+                } else {
+                    val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                    statusMsg = "Gagal setup MX: " + err
+                }
+            } catch (e: Exception) {
+                statusMsg = "Error: " + e.message
+            } finally {
+                isSettingUpMx = false
+            }
         }
     }
 
@@ -86,7 +163,9 @@ fun EmailScreen() {
         scope.launch {
             isLoading = true
             try {
-                // Load Custom Rules
+                checkDomainMxStatus(zoneId)
+
+                // 1. Load Custom Rules
                 val resRules = ApiClient.api.listEmailRules(zoneId)
                 if (resRules.isSuccessful && resRules.body()?.success == true) {
                     val raw = resRules.body()?.result ?: emptyList()
@@ -108,28 +187,36 @@ fun EmailScreen() {
                         val actions = obj.getAsJsonArray("actions")
                         actions?.forEach { a ->
                             val aObj = a.asJsonObject
-                            if (aObj.get("type")?.asString == "forward") {
-                                val valArr = aObj.getAsJsonArray("value")
-                                forward = valArr?.firstOrNull()?.asString ?: ""
-                            }
+                            val actType = aObj.get("type")?.asString ?: ""
+                            val valArr = aObj.getAsJsonArray("value")
+                            val valStr = valArr?.firstOrNull()?.asString ?: ""
+                            forward = if (actType == "worker") "Worker: " + valStr else valStr
                         }
                         CustomEmailRuleItem(id, name, match, forward, enabled)
                     }
                     customRules = parsed
                 }
 
-                // Load Catch-All
+                // 2. Load Catch-All persis seperti SC Web
                 val resCatch = ApiClient.api.getEmailCatchAll(zoneId)
                 if (resCatch.isSuccessful && resCatch.body()?.success == true) {
                     val rElement = resCatch.body()?.result
                     val rObj = if (rElement?.isJsonObject == true) rElement.asJsonObject else null
                     catchAllEnabled = rObj?.get("enabled")?.asBoolean ?: false
+                    
                     val actions = rObj?.getAsJsonArray("actions")
-                    actions?.forEach { a ->
-                        val aObj = a.asJsonObject
-                        if (aObj.get("type")?.asString == "forward") {
-                            catchAllForwardTo = aObj.getAsJsonArray("value")?.firstOrNull()?.asString ?: ""
+                    if (actions != null && actions.size() > 0) {
+                        val mainAction = actions[0].asJsonObject
+                        val actionType = mainAction.get("type")?.asString ?: "forward"
+                        catchAllActionType = actionType
+                        val valStr = mainAction.getAsJsonArray("value")?.firstOrNull()?.asString ?: ""
+                        if (actionType == "worker") {
+                            catchAllWorkerTarget = valStr
+                        } else {
+                            catchAllForwardTo = valStr
                         }
+                    } else {
+                        catchAllActionType = "forward"
                     }
                 }
             } catch (_: Exception) {} finally {
@@ -155,8 +242,9 @@ fun EmailScreen() {
                     }
                 }
                 loadDestinations()
+                loadWorkersList()
             } catch (e: Exception) {
-                statusMsg = "Error: ${e.message}"
+                statusMsg = "Error: " + e.message
             }
         }
     }
@@ -183,7 +271,7 @@ fun EmailScreen() {
                     val currentZoneLabel = selectedZone?.name ?: "(Pilih Zone)"
                     Text("Domain: " + currentZoneLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 }
-                IconButton(onClick = { selectedZone?.let { loadZoneRules(it.id) }; loadDestinations() }, enabled = !isLoading) {
+                IconButton(onClick = { selectedZone?.let { loadZoneRules(it.id) }; loadDestinations(); loadWorkersList() }, enabled = !isLoading) {
                     Text(if (isLoading) "⏳" else "🔄")
                 }
             }
@@ -216,6 +304,49 @@ fun EmailScreen() {
                                     loadZoneRules(z.id)
                                 }
                             )
+                        }
+                    }
+                }
+            }
+
+            // --- BANNER OTOMATIS STATUS MX / SPF RECORD CLOUDFLARE ---
+            if (selectedZone != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                val isMxReady = zoneMxStatus == "ready"
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isMxReady) Color(0xFFDCFCE7) else Color(0xFFFEF3C7)
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = if (isMxReady) "✅ STATUS PERUTEAN: MX Record Siap & Aktif!" else "⚠️ STATUS PERUTEAN: MX Records Belum Dikonfigurasi (" + (if (zoneMxStatus.isBlank()) "Mengecek..." else zoneMxStatus) + ")",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isMxReady) Color(0xFF166534) else Color(0xFF92400E)
+                            )
+                        }
+
+                        if (!isMxReady) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "Domain ini belum memiliki record MX & SPF Cloudflare aktif. Klik tombol di bawah untuk memasangnya otomatis tanpa input manual.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF78350F)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = { selectedZone?.let { setupCloudflareMxAutomatically(it.id) } },
+                                enabled = !isSettingUpMx,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(if (isSettingUpMx) "Memasang DNS MX..." else "⚡ Pasang MX & SPF Cloudflare Otomatis")
+                            }
                         }
                     }
                 }
@@ -314,11 +445,11 @@ fun EmailScreen() {
                                 }
                                 scope.launch {
                                     isSaving = true
-                                    val fullAddress = "${newAliasInput}@${zone.name}"
-                                    statusMsg = "Menambahkan rule untuk $fullAddress..."
+                                    val fullAddress = newAliasInput + "@" + zone.name
+                                    statusMsg = "Menambahkan rule untuk " + fullAddress + "..."
                                     try {
                                         val payload = mapOf(
-                                            "name" to "Forward $newAliasInput",
+                                            "name" to ("Forward " + newAliasInput),
                                             "enabled" to true,
                                             "matchers" to listOf(
                                                 mapOf("type" to "literal", "field" to "to", "value" to fullAddress)
@@ -329,15 +460,15 @@ fun EmailScreen() {
                                         )
                                         val res = ApiClient.api.createEmailRule(zone.id, payload)
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "✅ Rule untuk $fullAddress berhasil dibuat!"
+                                            statusMsg = "✅ Rule untuk " + fullAddress + " berhasil dibuat!"
                                             newAliasInput = ""
                                             loadZoneRules(zone.id)
                                         } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                                            statusMsg = "Gagal: $err"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                            statusMsg = "Gagal: " + err
                                         }
                                     } catch (e: Exception) {
-                                        statusMsg = "Error: ${e.message}"
+                                        statusMsg = "Error: " + e.message
                                     } finally {
                                         isSaving = false
                                     }
@@ -353,7 +484,7 @@ fun EmailScreen() {
             }
 
             item {
-                Text("Daftar Rule Aktif (${customRules.size}):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("Daftar Rule Aktif (" + customRules.size + "):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             }
 
             if (customRules.isEmpty() && !isLoading) {
@@ -376,7 +507,7 @@ fun EmailScreen() {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(r.matchAddress.ifBlank { r.name }, fontWeight = FontWeight.Bold)
                             Spacer(modifier = Modifier.height(2.dp))
-                            Text("➡ ${r.forwardTo}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                            Text("➡ " + r.forwardTo, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                         }
 
                         IconButton(onClick = {
@@ -390,7 +521,7 @@ fun EmailScreen() {
                                         loadZoneRules(zone.id)
                                     }
                                 } catch (e: Exception) {
-                                    statusMsg = "Error: ${e.message}"
+                                    statusMsg = "Error: " + e.message
                                 }
                             }
                         }) {
@@ -401,7 +532,7 @@ fun EmailScreen() {
             }
         }
 
-        // --- SUB-TAB 1: CATCH-ALL ROUTING ---
+        // --- SUB-TAB 1: CATCH-ALL ROUTING (BISA KE WORKER ATAU FORWARD EMAIL) ---
         if (selectedTab == 1) {
             item {
                 Card(
@@ -410,12 +541,13 @@ fun EmailScreen() {
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
-                        Text("📥 Catch-All Email", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("📥 Catch-All Email Routing", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         val catchAllDomain = "@" + (selectedZone?.name ?: "domain.com")
-                        Text("Teruskan SEMUA email apa saja yang dikirim ke domain " + catchAllDomain + " tanpa perlu membuat alias satu-satu.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        Text("Teruskan SEMUA email apa saja yang dikirim ke domain " + catchAllDomain + " ke Email Forwarding atau proses via Worker.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
 
                         Spacer(modifier = Modifier.height(14.dp))
 
+                        // Switch Status Catch-All
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -428,32 +560,118 @@ fun EmailScreen() {
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
 
+                        // PILIHAN AKSI KATEGORI: Forward to Email ATAU Send to Worker
                         ExposedDropdownMenuBox(
-                            expanded = destDropdownExpanded,
-                            onExpandedChange = { destDropdownExpanded = !destDropdownExpanded }
+                            expanded = catchAllActionExpanded,
+                            onExpandedChange = { catchAllActionExpanded = !catchAllActionExpanded }
                         ) {
+                            val actionLabel = if (catchAllActionType == "worker") "Send to Worker (⚡ Eksekusi Script)" else "Forward to destination address (✉️️ Email)"
                             OutlinedTextField(
-                                value = catchAllForwardTo.ifBlank { "Pilih Email Penerima Utama" },
+                                value = actionLabel,
                                 onValueChange = {},
                                 readOnly = true,
-                                label = { Text("Email Forwarding Penerima") },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = destDropdownExpanded) },
+                                label = { Text("Aksi / Action Kategori") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = catchAllActionExpanded) },
                                 modifier = Modifier.menuAnchor().fillMaxWidth()
                             )
                             ExposedDropdownMenu(
-                                expanded = destDropdownExpanded,
-                                onDismissRequest = { destDropdownExpanded = false }
+                                expanded = catchAllActionExpanded,
+                                onDismissRequest = { catchAllActionExpanded = false }
                             ) {
-                                destinations.filter { it.verified }.forEach { d ->
-                                    DropdownMenuItem(
-                                        text = { Text(d.email) },
-                                        onClick = {
-                                            catchAllForwardTo = d.email
-                                            destDropdownExpanded = false
+                                DropdownMenuItem(
+                                    text = { Text("Forward to destination address (✉️ Email)") },
+                                    onClick = {
+                                        catchAllActionType = "forward"
+                                        catchAllActionExpanded = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Send to Worker (⚡ Eksekusi Script)") },
+                                    onClick = {
+                                        catchAllActionType = "worker"
+                                        catchAllActionExpanded = false
+                                    }
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // KONDISI 1: JIKA FORWARD TO EMAIL
+                        if (catchAllActionType == "forward") {
+                            ExposedDropdownMenuBox(
+                                expanded = catchAllForwardDropdownExpanded,
+                                onExpandedChange = { catchAllForwardDropdownExpanded = !catchAllForwardDropdownExpanded }
+                            ) {
+                                OutlinedTextField(
+                                    value = catchAllForwardTo.ifBlank { "Pilih Email Forwarding Terverifikasi" },
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("Pilih Email Forwarding") },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = catchAllForwardDropdownExpanded) },
+                                    modifier = Modifier.menuAnchor().fillMaxWidth()
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = catchAllForwardDropdownExpanded,
+                                    onDismissRequest = { catchAllForwardDropdownExpanded = false }
+                                ) {
+                                    val verifiedList = destinations.filter { it.verified }
+                                    if (verifiedList.isEmpty()) {
+                                        DropdownMenuItem(
+                                            text = { Text("Belum ada email terverifikasi") },
+                                            onClick = { catchAllForwardDropdownExpanded = false }
+                                        )
+                                    } else {
+                                        verifiedList.forEach { d ->
+                                            DropdownMenuItem(
+                                                text = { Text(d.email) },
+                                                onClick = {
+                                                    catchAllForwardTo = d.email
+                                                    catchAllForwardDropdownExpanded = false
+                                                }
+                                            )
                                         }
-                                    )
+                                    }
+                                }
+                            }
+                        }
+
+                        // KONDISI 2: JIKA SEND TO WORKER
+                        if (catchAllActionType == "worker") {
+                            ExposedDropdownMenuBox(
+                                expanded = catchAllWorkerDropdownExpanded,
+                                onExpandedChange = { catchAllWorkerDropdownExpanded = !catchAllWorkerDropdownExpanded }
+                            ) {
+                                OutlinedTextField(
+                                    value = catchAllWorkerTarget.ifBlank { "Pilih Worker Tujuan" },
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("Pilih Target Worker") },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = catchAllWorkerDropdownExpanded) },
+                                    modifier = Modifier.menuAnchor().fillMaxWidth()
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = catchAllWorkerDropdownExpanded,
+                                    onDismissRequest = { catchAllWorkerDropdownExpanded = false }
+                                ) {
+                                    if (workerList.isEmpty()) {
+                                        DropdownMenuItem(
+                                            text = { Text("Tidak ada worker di akun ini") },
+                                            onClick = { catchAllWorkerDropdownExpanded = false }
+                                        )
+                                    } else {
+                                        workerList.forEach { w ->
+                                            DropdownMenuItem(
+                                                text = { Text("⚡ " + w) },
+                                                onClick = {
+                                                    catchAllWorkerTarget = w
+                                                    catchAllWorkerDropdownExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -463,29 +681,43 @@ fun EmailScreen() {
                         Button(
                             onClick = {
                                 val zone = selectedZone ?: return@Button
-                                if (catchAllEnabled && catchAllForwardTo.isBlank()) {
-                                    statusMsg = "Pilih email penerima untuk catch-all!"
+                                val targetVal = if (catchAllActionType == "worker") catchAllWorkerTarget else catchAllForwardTo
+
+                                if (catchAllEnabled && targetVal.isBlank()) {
+                                    statusMsg = if (catchAllActionType == "worker") "Pilih worker tujuan!" else "Pilih email tujuan!"
                                     return@Button
                                 }
+
                                 scope.launch {
                                     isSaving = true
                                     statusMsg = "Menyimpan pengaturan Catch-All..."
                                     try {
+                                        val actionsList = if (catchAllEnabled) {
+                                            listOf(
+                                                mapOf(
+                                                    "type" to catchAllActionType,
+                                                    "value" to listOf(targetVal)
+                                                )
+                                            )
+                                        } else emptyList()
+
                                         val payload = mapOf(
                                             "name" to "Catch-All Rule",
                                             "enabled" to catchAllEnabled,
                                             "matchers" to listOf(mapOf("type" to "all")),
-                                            "actions" to if (catchAllEnabled) listOf(mapOf("type" to "forward", "value" to listOf(catchAllForwardTo))) else emptyList()
+                                            "actions" to actionsList
                                         )
+
                                         val res = ApiClient.api.updateEmailCatchAll(zone.id, payload)
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "✅ Pengaturan Catch-All berhasil diperbarui!"
+                                            val destLabel = if (catchAllActionType == "worker") "Worker: " + targetVal else targetVal
+                                            statusMsg = "✅ Catch-All diperbarui -> " + (if (catchAllEnabled) destLabel else "Nonaktif")
                                         } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                                            statusMsg = "Gagal: $err"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                            statusMsg = "Gagal: " + err
                                         }
                                     } catch (e: Exception) {
-                                        statusMsg = "Error: ${e.message}"
+                                        statusMsg = "Error: " + e.message
                                     } finally {
                                         isSaving = false
                                     }
@@ -494,7 +726,7 @@ fun EmailScreen() {
                             modifier = Modifier.fillMaxWidth(),
                             enabled = !isSaving && selectedZone != null
                         ) {
-                            Text(if (isSaving) "Menyimpan..." else "💾 Terapkan Catch-All")
+                            Text(if (isSaving) "Menyimpan..." else "💾 Simpan Pengaturan Catch-All")
                         }
                     }
                 }
@@ -537,14 +769,15 @@ fun EmailScreen() {
                                             val payload = mapOf("email" to newDestEmail)
                                             val res = ApiClient.api.createEmailDestination(accId, payload)
                                             if (res.isSuccessful && res.body()?.success == true) {
-                                                statusMsg = "✅ Verifikasi dikirim ke $newDestEmail! Cek inbox."
+                                                statusMsg = "✅ Verifikasi dikirim ke " + newDestEmail + "! Cek inbox."
                                                 newDestEmail = ""
                                                 loadDestinations()
                                             } else {
-                                                statusMsg = "Gagal: HTTP ${res.code()}"
+                                                val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                                statusMsg = "Gagal: " + err
                                             }
                                         } catch (e: Exception) {
-                                            statusMsg = "Error: ${e.message}"
+                                            statusMsg = "Error: " + e.message
                                         } finally {
                                             isSaving = false
                                         }
@@ -560,7 +793,7 @@ fun EmailScreen() {
             }
 
             item {
-                Text("Daftar Email Tujuan (${destinations.size}):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("Daftar Email Tujuan (" + destinations.size + "):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             }
 
             items(destinations) { d ->
@@ -585,16 +818,16 @@ fun EmailScreen() {
 
                         IconButton(onClick = {
                             scope.launch {
-                                statusMsg = "Menghapus tujuan ${d.email}..."
+                                statusMsg = "Menghapus tujuan " + d.email + "..."
                                 try {
                                     val accId = CfAccountHelper.ensureAccountId()
                                     val res = ApiClient.api.deleteEmailDestination(accId, d.id)
                                     if (res.isSuccessful && res.body()?.success == true) {
-                                        statusMsg = "🗑 Email ${d.email} dicopot!"
+                                        statusMsg = "🗑 Email " + d.email + " dicopot!"
                                         loadDestinations()
                                     }
                                 } catch (e: Exception) {
-                                    statusMsg = "Error: ${e.message}"
+                                    statusMsg = "Error: " + e.message
                                 }
                             }
                         }) {

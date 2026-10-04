@@ -88,7 +88,7 @@ interface WorkerApi {
     suspend fun updateWorkerSettings(
         @Path("accountId") accountId: String,
         @Path("scriptName") scriptName: String,
-        @Body body: Map<String, Any>
+        @Body @JvmSuppressWildcards body: Map<String, Any>
     ): Response<CfStandardResponse>
 
     @GET("accounts/{accountId}/workers/subdomain")
@@ -121,7 +121,14 @@ interface WorkerApi {
     suspend fun putWorkerSecret(
         @Path("accountId") accountId: String,
         @Path("serviceName") serviceName: String,
-        @Body body: Map<String, Any>
+        @Body @JvmSuppressWildcards body: Map<String, Any>
+    ): Response<CfStandardResponse>
+
+    @PUT("accounts/{accountId}/workers/services/{serviceName}/environments/production/secrets")
+    suspend fun putWorkerSecretStringMap(
+        @Path("accountId") accountId: String,
+        @Path("serviceName") serviceName: String,
+        @Body body: Map<String, String>
     ): Response<CfStandardResponse>
 
     @DELETE("accounts/{accountId}/workers/services/{serviceName}/environments/production/secrets/{secretName}")
@@ -139,7 +146,7 @@ interface WorkerApi {
     suspend fun listZones(@Query("account.id") accountId: String? = null): Response<CfListResponse<ZoneItem>>
 
     @POST("zones")
-    suspend fun createZone(@Body body: Map<String, Any>): Response<CfStandardResponse>
+    suspend fun createZone(@Body @JvmSuppressWildcards body: Map<String, Any>): Response<CfStandardResponse>
 
     @DELETE("zones/{zoneId}")
     suspend fun deleteZone(@Path("zoneId") zoneId: String): Response<CfStandardResponse>
@@ -148,10 +155,10 @@ interface WorkerApi {
     suspend fun listDns(@Path("zoneId") zoneId: String, @Query("per_page") perPage: Int = 100): Response<CfListResponse<DnsRecordItem>>
 
     @POST("zones/{zoneId}/dns_records")
-    suspend fun createDns(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+    suspend fun createDns(@Path("zoneId") zoneId: String, @Body @JvmSuppressWildcards body: Map<String, Any>): Response<CfStandardResponse>
 
     @PUT("zones/{zoneId}/dns_records/{recordId}")
-    suspend fun updateDns(@Path("zoneId") zoneId: String, @Path("recordId") recordId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+    suspend fun updateDns(@Path("zoneId") zoneId: String, @Path("recordId") recordId: String, @Body @JvmSuppressWildcards body: Map<String, Any>): Response<CfStandardResponse>
 
     @DELETE("zones/{zoneId}/dns_records/{recordId}")
     suspend fun deleteDns(@Path("zoneId") zoneId: String, @Path("recordId") recordId: String): Response<CfStandardResponse>
@@ -161,20 +168,26 @@ interface WorkerApi {
     suspend fun getUniversalSslSettings(@Path("zoneId") zoneId: String): Response<CfStandardResponse>
 
     @PATCH("zones/{zoneId}/ssl/universal/settings")
-    suspend fun updateUniversalSslSettings(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+    suspend fun updateUniversalSslSettings(@Path("zoneId") zoneId: String, @Body @JvmSuppressWildcards body: Map<String, Any>): Response<CfStandardResponse>
 
     @POST("zones/{zoneId}/ssl/universal/settings")
-    suspend fun reorderSslVerification(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+    suspend fun reorderSslVerification(@Path("zoneId") zoneId: String, @Body @JvmSuppressWildcards body: Map<String, Any>): Response<CfStandardResponse>
 
     // --- EMAIL ROUTING ---
     @GET("accounts/{accountId}/email/routing/addresses")
     suspend fun listEmailDestinations(@Path("accountId") accountId: String): Response<CfListResponse<JsonObject>>
 
     @POST("accounts/{accountId}/email/routing/addresses")
-    suspend fun createEmailDestination(@Path("accountId") accountId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+    suspend fun createEmailDestination(@Path("accountId") accountId: String, @Body @JvmSuppressWildcards body: Map<String, Any>): Response<CfStandardResponse>
 
     @DELETE("accounts/{accountId}/email/routing/addresses/{emailId}")
     suspend fun deleteEmailDestination(@Path("accountId") accountId: String, @Path("emailId") emailId: String): Response<CfStandardResponse>
+
+    @GET("zones/{zoneId}/email/routing")
+    suspend fun getEmailRoutingSettings(@Path("zoneId") zoneId: String): Response<CfStandardResponse>
+
+    @POST("zones/{zoneId}/email/routing/enable")
+    suspend fun enableEmailRouting(@Path("zoneId") zoneId: String): Response<CfStandardResponse>
 
     @GET("zones/{zoneId}/email/routing/rules")
     suspend fun listEmailRules(@Path("zoneId") zoneId: String): Response<CfListResponse<JsonObject>>
@@ -183,10 +196,10 @@ interface WorkerApi {
     suspend fun getEmailCatchAll(@Path("zoneId") zoneId: String): Response<CfStandardResponse>
 
     @PUT("zones/{zoneId}/email/routing/rules/catch_all")
-    suspend fun updateEmailCatchAll(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+    suspend fun updateEmailCatchAll(@Path("zoneId") zoneId: String, @Body @JvmSuppressWildcards body: Map<String, Any>): Response<CfStandardResponse>
 
     @POST("zones/{zoneId}/email/routing/rules")
-    suspend fun createEmailRule(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+    suspend fun createEmailRule(@Path("zoneId") zoneId: String, @Body @JvmSuppressWildcards body: Map<String, Any>): Response<CfStandardResponse>
 
     @DELETE("zones/{zoneId}/email/routing/rules/{ruleId}")
     suspend fun deleteEmailRule(@Path("zoneId") zoneId: String, @Path("ruleId") ruleId: String): Response<CfStandardResponse>
@@ -196,7 +209,7 @@ interface WorkerApi {
     suspend fun listTunnels(@Path("accountId") accountId: String, @Query("is_deleted") isDeleted: Boolean = false): Response<CfListResponse<JsonObject>>
 
     @POST("accounts/{accountId}/cfd_tunnel")
-    suspend fun createTunnel(@Path("accountId") accountId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+    suspend fun createTunnel(@Path("accountId") accountId: String, @Body @JvmSuppressWildcards body: Map<String, Any>): Response<CfStandardResponse>
 
     @DELETE("accounts/{accountId}/cfd_tunnel/{tunnelId}")
     suspend fun deleteTunnel(@Path("accountId") accountId: String, @Path("tunnelId") tunnelId: String): Response<CfStandardResponse>
@@ -208,14 +221,14 @@ interface WorkerApi {
     suspend fun getTunnelConfigurations(@Path("accountId") accountId: String, @Path("tunnelId") tunnelId: String): Response<CfStandardResponse>
 
     @PUT("accounts/{accountId}/cfd_tunnel/{tunnelId}/configurations")
-    suspend fun updateTunnelConfigurations(@Path("accountId") accountId: String, @Path("tunnelId") tunnelId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+    suspend fun updateTunnelConfigurations(@Path("accountId") accountId: String, @Path("tunnelId") tunnelId: String, @Body @JvmSuppressWildcards body: Map<String, Any>): Response<CfStandardResponse>
 
     // --- CLOUDFLARE PAGES ---
     @GET("accounts/{accountId}/pages/projects")
     suspend fun listPagesProjects(@Path("accountId") accountId: String): Response<CfListResponse<JsonObject>>
 
     @POST("accounts/{accountId}/pages/projects")
-    suspend fun createPagesProject(@Path("accountId") accountId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+    suspend fun createPagesProject(@Path("accountId") accountId: String, @Body @JvmSuppressWildcards body: Map<String, Any>): Response<CfStandardResponse>
 
     @DELETE("accounts/{accountId}/pages/projects/{projectName}")
     suspend fun deletePagesProject(@Path("accountId") accountId: String, @Path("projectName") projectName: String): Response<CfStandardResponse>
@@ -224,7 +237,7 @@ interface WorkerApi {
     suspend fun listPagesCustomDomains(@Path("accountId") accountId: String, @Path("projectName") projectName: String): Response<CfListResponse<JsonObject>>
 
     @POST("accounts/{accountId}/pages/projects/{projectName}/domains")
-    suspend fun addPagesCustomDomain(@Path("accountId") accountId: String, @Path("projectName") projectName: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+    suspend fun addPagesCustomDomain(@Path("accountId") accountId: String, @Path("projectName") projectName: String, @Body @JvmSuppressWildcards body: Map<String, Any>): Response<CfStandardResponse>
 
     @DELETE("accounts/{accountId}/pages/projects/{projectName}/domains/{domainName}")
     suspend fun deletePagesCustomDomain(@Path("accountId") accountId: String, @Path("projectName") projectName: String, @Path("domainName") domainName: String): Response<CfStandardResponse>
@@ -234,7 +247,7 @@ interface WorkerApi {
     suspend fun listR2Buckets(@Path("accountId") accountId: String): Response<JsonObject>
 
     @POST("accounts/{accountId}/r2/buckets")
-    suspend fun createR2Bucket(@Path("accountId") accountId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+    suspend fun createR2Bucket(@Path("accountId") accountId: String, @Body @JvmSuppressWildcards body: Map<String, Any>): Response<CfStandardResponse>
 
     @DELETE("accounts/{accountId}/r2/buckets/{bucketName}")
     suspend fun deleteR2Bucket(@Path("accountId") accountId: String, @Path("bucketName") bucketName: String): Response<CfStandardResponse>

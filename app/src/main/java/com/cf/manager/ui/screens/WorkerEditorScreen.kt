@@ -68,7 +68,17 @@ fun WorkerEditorScreen() {
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var newWorkerName by remember { mutableStateOf("") }
-    var newWorkerCode by remember { mutableStateOf("export default {\n  async fetch(request, env) {\n    return new Response(\"Halo dari Cloudflare Worker!\");\n  }\n};") }
+    var newWorkerCode by remember {
+        mutableStateOf(
+            """
+            export default {
+              async fetch(request, env) {
+                return new Response("Halo dari Cloudflare Worker!");
+              }
+            };
+            """.trimIndent()
+        )
+    }
     var newRawUrl by remember { mutableStateOf("") }
     var newCompatDate by remember { mutableStateOf("2024-01-01") }
     var newEnableNodeCompat by remember { mutableStateOf(true) }
@@ -114,13 +124,15 @@ fun WorkerEditorScreen() {
                 if (content.isNotBlank()) {
                     if (showEditDialog) {
                         editingScriptCode = content
+                        detectedBindings = SmartWranglerParser.parseScriptBindings(content)
                     } else if (showCreateDialog) {
                         newWorkerCode = content
+                        detectedBindings = SmartWranglerParser.parseScriptBindings(content)
                     }
                     statusMsg = "📄 File script berhasil dimuat!"
                 }
             } catch (e: Exception) {
-                statusMsg = "Gagal baca file: ${e.message}"
+                statusMsg = "Gagal baca file: " + e.message
             }
         }
     }
@@ -189,11 +201,11 @@ fun WorkerEditorScreen() {
                         workerDomainsMap = map
                     }
                 } else {
-                    val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                    statusMsg = "Gagal memuat list worker: $err"
+                    val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                    statusMsg = "Gagal memuat list worker: " + err
                 }
             } catch (e: Exception) {
-                statusMsg = "Error: ${e.message}"
+                statusMsg = "Error: " + e.message
             } finally {
                 isLoadingWorkers = false
             }
@@ -233,7 +245,14 @@ fun WorkerEditorScreen() {
                     newRawUrl = ""
                     newCompatDate = "2024-01-01"
                     newEnableNodeCompat = true
-                    newWorkerCode = "export default {\n  async fetch(request, env) {\n    return new Response(\"Halo dari Cloudflare Worker!\");\n  }\n};"
+                    newWorkerCode = """
+                    export default {
+                      async fetch(request, env) {
+                        return new Response("Halo dari Cloudflare Worker!");
+                      }
+                    };
+                    """.trimIndent()
+                    detectedBindings = SmartWranglerParser.parseScriptBindings(newWorkerCode)
                     showCreateDialog = true
                 },
                 modifier = Modifier.fillMaxWidth()
@@ -254,7 +273,7 @@ fun WorkerEditorScreen() {
         }
 
         item {
-            Text("Daftar Worker Aktif (${workers.size}):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("Daftar Worker Aktif (" + workers.size + "):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         }
 
         if (workers.isEmpty() && !isLoadingWorkers) {
@@ -265,7 +284,7 @@ fun WorkerEditorScreen() {
 
         items(workers) { wName ->
             val customDomain = workerDomainsMap[wName]
-            val workersDevUrl = if (accountSubdomain.isNotBlank()) "https://$wName.$accountSubdomain.workers.dev" else ""
+            val workersDevUrl = if (accountSubdomain.isNotBlank()) "https://" + wName + "." + accountSubdomain + ".workers.dev" else ""
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -279,12 +298,12 @@ fun WorkerEditorScreen() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("⚡ $wName", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text("⚡ " + wName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             Spacer(modifier = Modifier.height(4.dp))
 
                             if (workersDevUrl.isNotBlank()) {
                                 Text(
-                                    text = "🔗 $workersDevUrl",
+                                    text = "🔗 " + workersDevUrl,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary,
                                     textDecoration = TextDecoration.Underline,
@@ -293,9 +312,9 @@ fun WorkerEditorScreen() {
                             }
 
                             if (!customDomain.isNullOrBlank()) {
-                                val customUrl = "https://$customDomain"
+                                val customUrl = "https://" + customDomain
                                 Text(
-                                    text = "🌐 $customUrl",
+                                    text = "🌐 " + customUrl,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.secondary,
                                     textDecoration = TextDecoration.Underline,
@@ -326,7 +345,18 @@ fun WorkerEditorScreen() {
                                         val accId = CfAccountHelper.ensureAccountId()
                                         val res = ApiClient.api.getWorkerCode(accId, wName)
                                         if (res.isSuccessful) {
-                                            editingScriptCode = res.body()?.string() ?: ""
+                                            var code = res.body()?.string() ?: ""
+                                            // LOGIKA BERSIH DARI SC WEB: Buang header multipart boundary Cloudflare
+                                            if (code.contains("name=\"index.js\"")) {
+                                                code = code.replace(Regex("^--[\\s\\S]*?name=\"index.js\"[\\s\\S]*?\\r?\\n\\r?\\n"), "")
+                                                           .replace(Regex("\\r?\\n--[a-f0-9]+--\\s*$"), "")
+                                            } else if (code.contains("Content-Disposition: form-data")) {
+                                                code = code.replace(Regex("^--[\\s\\S]*?Content-Disposition[\\s\\S]*?\\r?\\n\\r?\\n"), "")
+                                                           .replace(Regex("\\r?\\n--[a-f0-9]+--\\s*$"), "")
+                                            }
+                                            editingScriptCode = code.trim()
+                                            // AUTO SMART WRANGLER: Langsung parsing binding begitu kode ditarik
+                                            detectedBindings = SmartWranglerParser.parseScriptBindings(editingScriptCode)
                                         } else {
                                             editingScriptCode = "/* Gagal mengunduh kode */"
                                         }
@@ -343,7 +373,7 @@ fun WorkerEditorScreen() {
                                             }
                                         } catch (_: Exception) {}
                                     } catch (e: Exception) {
-                                        editingScriptCode = "/* Error: ${e.message} */"
+                                        editingScriptCode = "/* Error: " + e.message + " */"
                                     } finally {
                                         isLoadingCode = false
                                     }
@@ -402,9 +432,9 @@ fun WorkerEditorScreen() {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("✏️ Edit Script Worker", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            Text("Target: $activeWorkerToEdit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                            Text("Target: " + activeWorkerToEdit, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                         }
-                        Row {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Button(
                                 onClick = {
                                     detectedBindings = SmartWranglerParser.parseScriptBindings(editingScriptCode)
@@ -413,7 +443,7 @@ fun WorkerEditorScreen() {
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                             ) {
-                                Text("🧠 Wrangler")
+                                Text("🧠 Wrangler (" + detectedBindings.size + ")")
                             }
                             Spacer(modifier = Modifier.width(6.dp))
                             IconButton(onClick = { showEditDialog = false }) { Text("❌") }
@@ -443,9 +473,10 @@ fun WorkerEditorScreen() {
                                     try {
                                         val code = withContext(Dispatchers.IO) { URL(editRawUrl).readText() }
                                         editingScriptCode = code
+                                        detectedBindings = SmartWranglerParser.parseScriptBindings(code)
                                         statusMsg = "✅ Script RAW dimuat!"
                                     } catch (e: Exception) {
-                                        statusMsg = "Gagal tarik RAW: ${e.message}"
+                                        statusMsg = "Gagal tarik RAW: " + e.message
                                     } finally {
                                         isFetchingRawEdit = false
                                     }
@@ -499,7 +530,10 @@ fun WorkerEditorScreen() {
                         } else {
                             OutlinedTextField(
                                 value = editingScriptCode,
-                                onValueChange = { editingScriptCode = it },
+                                onValueChange = { 
+                                    editingScriptCode = it
+                                    detectedBindings = SmartWranglerParser.parseScriptBindings(it)
+                                },
                                 modifier = Modifier.fillMaxSize(),
                                 textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace)
                             )
@@ -538,15 +572,15 @@ fun WorkerEditorScreen() {
 
                                         val res = ApiClient.api.deployWorkerMultipart(accId, activeWorkerToEdit, metaBody, scriptPart)
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "✅ Worker '$activeWorkerToEdit' berhasil di-deploy!"
+                                            statusMsg = "✅ Worker '" + activeWorkerToEdit + "' berhasil di-deploy!"
                                             showEditDialog = false
                                             loadWorkers()
                                         } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                                            statusMsg = "Gagal deploy: $err"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                            statusMsg = "Gagal deploy: " + err
                                         }
                                     } catch (e: Exception) {
-                                        statusMsg = "Error: ${e.message}"
+                                        statusMsg = "Error: " + e.message
                                     } finally {
                                         isSavingEdit = false
                                     }
@@ -581,7 +615,7 @@ fun WorkerEditorScreen() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("🚀 Buat Worker Baru", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Row {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Button(
                                 onClick = {
                                     detectedBindings = SmartWranglerParser.parseScriptBindings(newWorkerCode)
@@ -590,7 +624,7 @@ fun WorkerEditorScreen() {
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                             ) {
-                                Text("🧠 Wrangler")
+                                Text("🧠 Wrangler (" + detectedBindings.size + ")")
                             }
                             Spacer(modifier = Modifier.width(6.dp))
                             IconButton(onClick = { showCreateDialog = false }) { Text("❌") }
@@ -630,9 +664,10 @@ fun WorkerEditorScreen() {
                                     try {
                                         val code = withContext(Dispatchers.IO) { URL(newRawUrl).readText() }
                                         newWorkerCode = code
+                                        detectedBindings = SmartWranglerParser.parseScriptBindings(code)
                                         statusMsg = "✅ Script RAW dimuat!"
                                     } catch (e: Exception) {
-                                        statusMsg = "Gagal tarik RAW: ${e.message}"
+                                        statusMsg = "Gagal tarik RAW: " + e.message
                                     } finally {
                                         isFetchingRawNew = false
                                     }
@@ -682,7 +717,10 @@ fun WorkerEditorScreen() {
 
                     OutlinedTextField(
                         value = newWorkerCode,
-                        onValueChange = { newWorkerCode = it },
+                        onValueChange = { 
+                            newWorkerCode = it
+                            detectedBindings = SmartWranglerParser.parseScriptBindings(it)
+                        },
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                         textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace)
                     )
@@ -724,15 +762,15 @@ fun WorkerEditorScreen() {
 
                                         val res = ApiClient.api.deployWorkerMultipart(accId, target, metaBody, scriptPart)
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "🎉 Worker '$target' berhasil dibuat!"
+                                            statusMsg = "🎉 Worker '" + target + "' berhasil dibuat!"
                                             showCreateDialog = false
                                             loadWorkers()
                                         } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                                            statusMsg = "Gagal deploy: $err"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                            statusMsg = "Gagal deploy: " + err
                                         }
                                     } catch (e: Exception) {
-                                        statusMsg = "Error: ${e.message}"
+                                        statusMsg = "Error: " + e.message
                                     } finally {
                                         isDeployingNew = false
                                     }
@@ -759,7 +797,7 @@ fun WorkerEditorScreen() {
             ) {
                 Column(modifier = Modifier.padding(18.dp)) {
                     Text("🧠 Smart Wrangler AST Parser", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("Deteksi binding berdasarkan runtime script", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("Deteksi binding otomatis berdasarkan runtime script", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
 
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -829,7 +867,7 @@ fun WorkerEditorScreen() {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("🌐 Custom Domain Rute", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            Text("Worker: $activeWorkerForRoute", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                            Text("Worker: " + activeWorkerForRoute, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                         }
                         IconButton(onClick = { loadWorkerRoutes(activeWorkerForRoute) }, enabled = !isLoadingRoutes) {
                             Text(if (isLoadingRoutes) "⏳" else "🔄")
@@ -869,11 +907,11 @@ fun WorkerEditorScreen() {
                                             loadWorkerRoutes(activeWorkerForRoute)
                                             loadWorkers()
                                         } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                                            statusMsg = "Gagal: $err"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                            statusMsg = "Gagal: " + err
                                         }
                                     } catch (e: Exception) {
-                                        statusMsg = "Error: ${e.message}"
+                                        statusMsg = "Error: " + e.message
                                     } finally {
                                         isAddingRoute = false
                                     }
@@ -889,7 +927,7 @@ fun WorkerEditorScreen() {
                     HorizontalDivider()
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    Text("Rute Terdaftar (${activeWorkerRoutes.size}):", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Text("Rute Terdaftar (" + activeWorkerRoutes.size + "):", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(6.dp))
 
                     if (activeWorkerRoutes.isEmpty()) {
@@ -923,12 +961,12 @@ fun WorkerEditorScreen() {
                                                         val accId = CfAccountHelper.ensureAccountId()
                                                         val res = ApiClient.api.deleteWorkerDomain(accId, r.id)
                                                         if (res.isSuccessful && res.body()?.success == true) {
-                                                            statusMsg = "🗑 Rute domain ${r.hostname} dicopot!"
+                                                            statusMsg = "🗑 Rute domain " + r.hostname + " dicopot!"
                                                             loadWorkerRoutes(activeWorkerForRoute)
                                                             loadWorkers()
                                                         }
                                                     } catch (e: Exception) {
-                                                        statusMsg = "Error: ${e.message}"
+                                                        statusMsg = "Error: " + e.message
                                                     }
                                                 }
                                             },
@@ -955,24 +993,24 @@ fun WorkerEditorScreen() {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
             title = { Text("Hapus Worker?") },
-            text = { Text("Yakin ingin menghapus worker '$workerToDelete' secara permanen?") },
+            text = { Text("Yakin ingin menghapus worker '" + workerToDelete + "' secara permanen?") },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteConfirm = false
                     scope.launch {
-                        statusMsg = "Menghapus worker '$workerToDelete'..."
+                        statusMsg = "Menghapus worker '" + workerToDelete + "'..."
                         try {
                             val accId = CfAccountHelper.ensureAccountId()
                             val res = ApiClient.api.deleteWorker(accId, workerToDelete)
                             if (res.isSuccessful && res.body()?.success == true) {
-                                statusMsg = "🗑 Worker '$workerToDelete' berhasil dihapus!"
+                                statusMsg = "🗑 Worker '" + workerToDelete + "' berhasil dihapus!"
                                 loadWorkers()
                             } else {
-                                val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                                statusMsg = "Gagal menghapus: $err"
+                                val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                statusMsg = "Gagal menghapus: " + err
                             }
                         } catch (e: Exception) {
-                            statusMsg = "Error: ${e.message}"
+                            statusMsg = "Error: " + e.message
                         }
                     }
                 }) {
