@@ -2,9 +2,9 @@ package com.cf.dfathu.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,15 +32,16 @@ import com.cf.dfathu.data.local.AccountStorage
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URL
+import java.util.concurrent.TimeUnit
 
 data class WorkerDomainItem(
     val id: String = "",
@@ -111,6 +112,15 @@ fun WorkerEditorScreen() {
     val scope = rememberCoroutineScope()
     val gson = remember { Gson() }
 
+    // OPTIMASI HTTP CLIENT: Timeout ketat & Reusable
+    val httpClient = remember {
+        OkHttpClient.Builder()
+            .connectTimeout(12, TimeUnit.SECONDS)
+            .readTimeout(12, TimeUnit.SECONDS)
+            .writeTimeout(12, TimeUnit.SECONDS)
+            .build()
+    }
+
     fun openUrl(urlStr: String) {
         try {
             val validUrl = if (!urlStr.startsWith("http://") && !urlStr.startsWith("https://")) "https://$urlStr" else urlStr
@@ -143,7 +153,7 @@ fun WorkerEditorScreen() {
         }
     }
 
-    // --- FUN HELPER PUSH DEPLOYMENT & ENABLE SUBDOMAIN (FIX 404 NOT FOUND) ---
+    // --- FUN HELPER DEPLOYMENT WORKER ---
     fun deployWorkerScript(
         accId: String,
         workerName: String,
@@ -155,50 +165,51 @@ fun WorkerEditorScreen() {
     ) {
         scope.launch {
             try {
-                val client = OkHttpClient()
+                val deployResult = withContext(Dispatchers.IO) {
+                    val metadataObj = JsonObject().apply {
+                        addProperty("main_module", "index.js")
+                        addProperty("compatibility_date", compatDate)
+                        val flagsArr = com.google.gson.JsonArray()
+                        if (enableNodeCompat) flagsArr.add("nodejs_compat")
+                        add("compatibility_flags", flagsArr)
+                    }
 
-                // 1. Susun Metadata JSON
-                val metadataObj = JsonObject().apply {
-                    addProperty("main_module", "index.js")
-                    addProperty("compatibility_date", compatDate)
-                    val flagsArr = com.google.gson.JsonArray()
-                    if (enableNodeCompat) flagsArr.add("nodejs_compat")
-                    add("compatibility_flags", flagsArr)
-                }
+                    val multipartBuilder = MultipartBody.Builder()
+                        .setType(MultipartBody.FORM)
+                        .addFormDataPart("metadata", "metadata.json", metadataObj.toString().toRequestBody("application/json".toMediaType()))
+                        .addFormDataPart("index.js", "index.js", codeStr.toByteArray(Charsets.UTF_8).toRequestBody("application/javascript+module".toMediaType()))
 
-                // 2. Kirim Multipart Upload ke Cloudflare Worker API
-                val multipartBuilder = MultipartBody.Builder()
-                    .setType(MultipartBody.FORM)
-                    .addFormDataPart("metadata", "metadata.json", metadataObj.toString().toRequestBody("application/json".toMediaType()))
-                    .addFormDataPart("index.js", "index.js", codeStr.toByteArray(Charsets.UTF_8).toRequestBody("application/javascript+module".toMediaType()))
-
-                val deployReq = Request.Builder()
-                    .url("https://api.cloudflare.com/client/v4/accounts/$accId/workers/scripts/$workerName")
-                    .header("X-Auth-Email", email)
-                    .header("X-Auth-Key", apiKey)
-                    .put(multipartBuilder.build())
-                    .build()
-
-                val deployResp = withContext(Dispatchers.IO) { client.newCall(deployReq).execute() }
-                val deployRespStr = deployResp.body?.string() ?: ""
-                val deployJson = gson.fromJson(deployRespStr, JsonObject::class.java)
-
-                if (deployJson.get("success")?.asBoolean == true) {
-                    // 3. Wajib Enable Subdomain workers.dev agar TIDAK 404
-                    val enableSubdomainBody = JsonObject().apply { addProperty("enabled", true) }
-                    val enableReq = Request.Builder()
-                        .url("https://api.cloudflare.com/client/v4/accounts/$accId/workers/scripts/$workerName/subdomain")
+                    val deployReq = Request.Builder()
+                        .url("https://api.cloudflare.com/client/v4/accounts/$accId/workers/scripts/$workerName")
                         .header("X-Auth-Email", email)
                         .header("X-Auth-Key", apiKey)
-                        .post(enableSubdomainBody.toString().toRequestBody("application/json".toMediaType()))
+                        .put(multipartBuilder.build())
                         .build()
 
-                    withContext(Dispatchers.IO) { client.newCall(enableReq).execute() }
+                    val deployResp = httpClient.newCall(deployReq).execute()
+                    val deployRespStr = deployResp.body?.string() ?: ""
+                    val deployJson = gson.fromJson(deployRespStr, JsonObject::class.java)
 
+                    if (deployJson?.get("success")?.asBoolean == true) {
+                        val enableSubdomainBody = JsonObject().apply { addProperty("enabled", true) }
+                        val enableReq = Request.Builder()
+                            .url("https://api.cloudflare.com/client/v4/accounts/$accId/workers/scripts/$workerName/subdomain")
+                            .header("X-Auth-Email", email)
+                            .header("X-Auth-Key", apiKey)
+                            .post(enableSubdomainBody.toString().toRequestBody("application/json".toMediaType()))
+                            .build()
+                        httpClient.newCall(enableReq).execute()
+                        Pair(true, "")
+                    } else {
+                        val errDetail = deployJson?.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + deployResp.code)
+                        Pair(false, "Gagal Deploy: $errDetail")
+                    }
+                }
+
+                if (deployResult.first) {
                     onSuccess()
                 } else {
-                    val errDetail = deployJson.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + deployResp.code)
-                    onError("Gagal Deploy: $errDetail")
+                    onError(deployResult.second)
                 }
 
             } catch (e: Exception) {
@@ -212,7 +223,7 @@ fun WorkerEditorScreen() {
             isLoadingRoutes = true
             try {
                 val accId = CfAccountHelper.ensureAccountId()
-                val res = ApiClient.api.listWorkerDomains(accId)
+                val res = withContext(Dispatchers.IO) { ApiClient.api.listWorkerDomains(accId) }
                 if (res.isSuccessful && res.body()?.success == true) {
                     val raw = res.body()?.result ?: emptyList()
                     val list = mutableListOf<WorkerDomainItem>()
@@ -233,6 +244,7 @@ fun WorkerEditorScreen() {
         }
     }
 
+    // OPTIMASI: LOAD WORKERS PARALLEL (CEPAT & RESPONSIF)
     fun loadWorkers() {
         if (email.isBlank() || apiKey.isBlank()) {
             statusMsg = "⚠️ Isi Email & API Key di tab Akun terlebih dahulu!"
@@ -242,37 +254,45 @@ fun WorkerEditorScreen() {
             isLoadingWorkers = true
             try {
                 val accId = CfAccountHelper.ensureAccountId()
-                
-                try {
-                    val subRes = ApiClient.api.getAccountSubdomain(accId)
-                    if (subRes.isSuccessful && subRes.body()?.success == true) {
-                        val subElement = subRes.body()?.result
-                        val subObj = if (subElement?.isJsonObject == true) subElement.asJsonObject else null
-                        accountSubdomain = subObj?.get("subdomain")?.asString ?: ""
-                    }
-                } catch (_: Exception) {}
 
-                val res = ApiClient.api.listWorkers(accId)
-                if (res.isSuccessful && res.body()?.success == true) {
-                    val rawList = res.body()?.result ?: emptyList()
-                    workers = rawList.mapNotNull { it.get("id")?.asString }
+                withContext(Dispatchers.IO) {
+                    val subDeferred = async { ApiClient.api.getAccountSubdomain(accId) }
+                    val workersDeferred = async { ApiClient.api.listWorkers(accId) }
+                    val domainsDeferred = async { ApiClient.api.listWorkerDomains(accId) }
 
-                    val resDomains = ApiClient.api.listWorkerDomains(accId)
-                    if (resDomains.isSuccessful && resDomains.body()?.success == true) {
-                        val dList = resDomains.body()?.result ?: emptyList()
-                        val map = mutableMapOf<String, String>()
-                        dList.forEach { obj ->
-                            val srv = obj.get("service")?.asString
-                            val host = obj.get("hostname")?.asString
-                            if (!srv.isNullOrBlank() && !host.isNullOrBlank()) {
-                                map[srv] = host
-                            }
+                    try {
+                        val subRes = subDeferred.await()
+                        if (subRes.isSuccessful && subRes.body()?.success == true) {
+                            val subElement = subRes.body()?.result
+                            val subObj = if (subElement?.isJsonObject == true) subElement.asJsonObject else null
+                            accountSubdomain = subObj?.get("subdomain")?.asString ?: ""
                         }
-                        workerDomainsMap = map
+                    } catch (_: Exception) {}
+
+                    val res = workersDeferred.await()
+                    if (res.isSuccessful && res.body()?.success == true) {
+                        val rawList = res.body()?.result ?: emptyList()
+                        workers = rawList.mapNotNull { it.get("id")?.asString }
+
+                        try {
+                            val resDomains = domainsDeferred.await()
+                            if (resDomains.isSuccessful && resDomains.body()?.success == true) {
+                                val dList = resDomains.body()?.result ?: emptyList()
+                                val map = mutableMapOf<String, String>()
+                                dList.forEach { obj ->
+                                    val srv = obj.get("service")?.asString
+                                    val host = obj.get("hostname")?.asString
+                                    if (!srv.isNullOrBlank() && !host.isNullOrBlank()) {
+                                        map[srv] = host
+                                    }
+                                }
+                                workerDomainsMap = map
+                            }
+                        } catch (_: Exception) {}
+                    } else {
+                        val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                        statusMsg = "Gagal memuat list worker: " + err
                     }
-                } else {
-                    val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
-                    statusMsg = "Gagal memuat list worker: " + err
                 }
             } catch (e: Exception) {
                 statusMsg = "Error: " + e.message
@@ -413,33 +433,35 @@ fun WorkerEditorScreen() {
                                 scope.launch {
                                     try {
                                         val accId = CfAccountHelper.ensureAccountId()
-                                        val res = ApiClient.api.getWorkerCode(accId, wName)
-                                        if (res.isSuccessful) {
-                                            var code = res.body()?.string() ?: ""
-                                            if (code.contains("name=\"index.js\"")) {
-                                                code = code.replace(Regex("^--[\\s\\S]*?name=\"index.js\"[\\s\\S]*?\\r?\\n\\r?\\n"), "")
-                                                           .replace(Regex("\\r?\\n--[a-f0-9]+--\\s*$"), "")
-                                            } else if (code.contains("Content-Disposition: form-data")) {
-                                                code = code.replace(Regex("^--[\\s\\S]*?Content-Disposition[\\s\\S]*?\\r?\\n\\r?\\n"), "")
-                                                           .replace(Regex("\\r?\\n--[a-f0-9]+--\\s*$"), "")
+                                        withContext(Dispatchers.IO) {
+                                            val res = ApiClient.api.getWorkerCode(accId, wName)
+                                            if (res.isSuccessful) {
+                                                var code = res.body()?.string() ?: ""
+                                                if (code.contains("name=\"index.js\"")) {
+                                                    code = code.replace(Regex("^--[\\s\\S]*?name=\"index.js\"[\\s\\S]*?\\r?\\n\\r?\\n"), "")
+                                                               .replace(Regex("\\r?\\n--[a-f0-9]+--\\s*$"), "")
+                                                } else if (code.contains("Content-Disposition: form-data")) {
+                                                    code = code.replace(Regex("^--[\\s\\S]*?Content-Disposition[\\s\\S]*?\\r?\\n\\r?\\n"), "")
+                                                               .replace(Regex("\\r?\\n--[a-f0-9]+--\\s*$"), "")
+                                                }
+                                                editingScriptCode = code.trim()
+                                                detectedBindings = SmartWranglerParser.parseScriptBindings(editingScriptCode)
+                                            } else {
+                                                editingScriptCode = "/* Gagal mengunduh kode */"
                                             }
-                                            editingScriptCode = code.trim()
-                                            detectedBindings = SmartWranglerParser.parseScriptBindings(editingScriptCode)
-                                        } else {
-                                            editingScriptCode = "/* Gagal mengunduh kode */"
-                                        }
 
-                                        try {
-                                            val setRes = ApiClient.api.getWorkerSettings(accId, wName)
-                                            if (setRes.isSuccessful && setRes.body()?.success == true) {
-                                                val resElement = setRes.body()?.result
-                                                val resObj = if (resElement?.isJsonObject == true) resElement.asJsonObject else null
-                                                val cDate = resObj?.get("compatibility_date")?.asString
-                                                if (!cDate.isNullOrBlank()) editCompatDate = cDate
-                                                val flags = resObj?.getAsJsonArray("compatibility_flags")?.map { it.asString } ?: emptyList()
-                                                editEnableNodeCompat = flags.contains("nodejs_compat")
-                                            }
-                                        } catch (_: Exception) {}
+                                            try {
+                                                val setRes = ApiClient.api.getWorkerSettings(accId, wName)
+                                                if (setRes.isSuccessful && setRes.body()?.success == true) {
+                                                    val resElement = setRes.body()?.result
+                                                    val resObj = if (resElement?.isJsonObject == true) resElement.asJsonObject else null
+                                                    val cDate = resObj?.get("compatibility_date")?.asString
+                                                    if (!cDate.isNullOrBlank()) editCompatDate = cDate
+                                                    val flags = resObj?.getAsJsonArray("compatibility_flags")?.map { it.asString } ?: emptyList()
+                                                    editEnableNodeCompat = flags.contains("nodejs_compat")
+                                                }
+                                            } catch (_: Exception) {}
+                                        }
                                     } catch (e: Exception) {
                                         editingScriptCode = "/* Error: " + e.message + " */"
                                     } finally {
@@ -952,7 +974,7 @@ fun WorkerEditorScreen() {
                                             "service" to activeWorkerForRoute,
                                             "environment" to "production"
                                         )
-                                        val res = ApiClient.api.putWorkerDomain(accId, payload)
+                                        val res = withContext(Dispatchers.IO) { ApiClient.api.putWorkerDomain(accId, payload) }
                                         if (res.isSuccessful && res.body()?.success == true) {
                                             statusMsg = "✅ Domain terhubung!"
                                             newRouteDomainInput = ""
@@ -1011,7 +1033,7 @@ fun WorkerEditorScreen() {
                                                 scope.launch {
                                                     try {
                                                         val accId = CfAccountHelper.ensureAccountId()
-                                                        val res = ApiClient.api.deleteWorkerDomain(accId, r.id)
+                                                        val res = withContext(Dispatchers.IO) { ApiClient.api.deleteWorkerDomain(accId, r.id) }
                                                         if (res.isSuccessful && res.body()?.success == true) {
                                                             statusMsg = "🗑 Rute domain " + r.hostname + " dicopot!"
                                                             loadWorkerRoutes(activeWorkerForRoute)
@@ -1053,7 +1075,7 @@ fun WorkerEditorScreen() {
                         statusMsg = "Menghapus worker '" + workerToDelete + "'..."
                         try {
                             val accId = CfAccountHelper.ensureAccountId()
-                            val res = ApiClient.api.deleteWorker(accId, workerToDelete)
+                            val res = withContext(Dispatchers.IO) { ApiClient.api.deleteWorker(accId, workerToDelete) }
                             if (res.isSuccessful && res.body()?.success == true) {
                                 statusMsg = "🗑 Worker '" + workerToDelete + "' berhasil dihapus!"
                                 loadWorkers()

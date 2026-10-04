@@ -29,7 +29,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.cf.dfathu.data.AppConfig
-import com.cf.dfathu.data.api.ApiClient
 import com.cf.dfathu.data.api.CfAccountHelper
 import com.cf.dfathu.data.local.AccountStorage
 import com.cf.dfathu.data.model.CfAccount
@@ -46,6 +45,7 @@ import java.io.InputStream
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 data class CfPagesProjectItem(
     val name: String,
@@ -86,7 +86,7 @@ fun PagesNodeLocScreen() {
     val email = AppConfig.activeEmail.ifBlank { currAcc?.email ?: "" }
     val apiKey = AppConfig.activeApiKey.ifBlank { currAcc?.apiKey ?: "" }
 
-    var mainTab by remember { mutableStateOf(0) } // 0: Single Pages, 1: ⚡ Bulk Deploy Pages, 2: 🌐 NodeLoc DNS
+    var mainTab by remember { mutableStateOf(0) } // 0: Single Pages, 1: Bulk Deploy, 2: NodeLoc DNS
     val tabTitles = listOf("🚀 Single Pages", "⚡ Bulk Deploy", "🌐 NodeLoc DNS")
 
     // --- STATE CF PAGES SINGLE ---
@@ -165,7 +165,15 @@ fun PagesNodeLocScreen() {
 
     val scope = rememberCoroutineScope()
     val gson = remember { Gson() }
-    val httpClient = remember { OkHttpClient() }
+    
+    // OPTIMASI: Tambah Timeout biar loading gak lelet / nggantung
+    val httpClient = remember {
+        OkHttpClient.Builder()
+            .connectTimeout(12, TimeUnit.SECONDS)
+            .readTimeout(12, TimeUnit.SECONDS)
+            .writeTimeout(12, TimeUnit.SECONDS)
+            .build()
+    }
 
     // --- LAUNCHER FILE PICKER ANDROID ---
     var filePickerTarget by remember { mutableStateOf("worker_single") }
@@ -190,7 +198,6 @@ fun PagesNodeLocScreen() {
         }
     }
 
-    // --- HELPER READ URI DRAG DROP ---
     fun handleReadUri(uri: Uri, target: String) {
         try {
             val inputStream = context.contentResolver.openInputStream(uri)
@@ -329,8 +336,10 @@ fun PagesNodeLocScreen() {
                     .header("X-Auth-Key", apiKey)
                     .get().build()
 
-                val resp = withContext(Dispatchers.IO) { httpClient.newCall(req).execute() }
-                val respStr = resp.body?.string() ?: ""
+                val respStr = withContext(Dispatchers.IO) {
+                    val resp = httpClient.newCall(req).execute()
+                    resp.body?.string() ?: ""
+                }
                 val json = gson.fromJson(respStr, JsonObject::class.java)
 
                 if (json != null && json.get("success")?.asBoolean == true) {
@@ -347,7 +356,7 @@ fun PagesNodeLocScreen() {
                     pagesProjects = list
                     statusMsg = "✅ Memuat ${list.size} project Pages."
                 } else {
-                    val err = json?.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + resp.code)
+                    val err = json?.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: "Gagal koneksi API"
                     statusMsg = "❌ Gagal memuat Pages: $err"
                 }
             } catch (e: Exception) {
@@ -369,8 +378,10 @@ fun PagesNodeLocScreen() {
                     .header("X-Auth-Key", apiKey)
                     .get().build()
 
-                val resp = withContext(Dispatchers.IO) { httpClient.newCall(req).execute() }
-                val json = gson.fromJson(resp.body?.string() ?: "", JsonObject::class.java)
+                val json = withContext(Dispatchers.IO) {
+                    val resp = httpClient.newCall(req).execute()
+                    gson.fromJson(resp.body?.string() ?: "", JsonObject::class.java)
+                }
                 val arr = json?.getAsJsonArray("result") ?: JsonArray()
                 val list = mutableListOf<JsonObject>()
                 arr.forEach { list.add(it.asJsonObject) }
@@ -392,8 +403,10 @@ fun PagesNodeLocScreen() {
                     .header("Authorization", "Bearer $nodeLocTokenInput")
                     .get().build()
 
-                val resp = withContext(Dispatchers.IO) { httpClient.newCall(req).execute() }
-                val respStr = resp.body?.string() ?: ""
+                val respStr = withContext(Dispatchers.IO) {
+                    val resp = httpClient.newCall(req).execute()
+                    resp.body?.string() ?: ""
+                }
                 val json = gson.fromJson(respStr, JsonObject::class.java)
 
                 val arr = json?.getAsJsonArray("domains") ?: json?.getAsJsonArray("data") ?: JsonArray()
@@ -435,8 +448,10 @@ fun PagesNodeLocScreen() {
                     .header("Authorization", "Bearer $nodeLocTokenInput")
                     .get().build()
 
-                val resp = withContext(Dispatchers.IO) { httpClient.newCall(req).execute() }
-                val json = gson.fromJson(resp.body?.string() ?: "", JsonObject::class.java)
+                val json = withContext(Dispatchers.IO) {
+                    val resp = httpClient.newCall(req).execute()
+                    gson.fromJson(resp.body?.string() ?: "", JsonObject::class.java)
+                }
 
                 val arr = json?.getAsJsonArray("records") ?: json?.getAsJsonArray("data") ?: JsonArray()
                 val list = mutableListOf<NodeLocDnsRecordItem>()
@@ -607,6 +622,7 @@ fun PagesNodeLocScreen() {
                                 Text("🚀 Deploy", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                             }
 
+                            // SAFE PARSING CONFIG - GAK BAKAL CRASH LAGI!
                             OutlinedButton(
                                 onClick = {
                                     targetConfigProject = p.name
@@ -614,29 +630,31 @@ fun PagesNodeLocScreen() {
                                     kvBindingList.clear()
                                     r2BindingList.clear()
 
-                                    val prodCfg = p.rawJsonObject.getAsJsonObject("deployment_configs")?.getAsJsonObject("production")
-                                    configCompatDate = prodCfg?.get("compatibility_date")?.asString ?: "2024-01-01"
+                                    try {
+                                        val prodCfg = p.rawJsonObject.optJsonObject("deployment_configs")?.optJsonObject("production")
+                                        configCompatDate = prodCfg?.optString("compatibility_date") ?: "2024-01-01"
 
-                                    val flags = prodCfg?.getAsJsonArray("compatibility_flags")
-                                    configNodejsCompat = flags?.any { it.asString == "nodejs_compat" } == true
+                                        val flags = prodCfg?.optJsonArray("compatibility_flags")
+                                        configNodejsCompat = flags?.any { it.asString == "nodejs_compat" } == true
 
-                                    val envs = prodCfg?.getAsJsonObject("env_vars")
-                                    envs?.keySet()?.forEach { k ->
-                                        val v = envs.getAsJsonObject(k)?.get("value")?.asString ?: ""
-                                        envList.add(Pair(k, v))
-                                    }
+                                        val envs = prodCfg?.optJsonObject("env_vars")
+                                        envs?.keySet()?.forEach { k ->
+                                            val v = envs.optJsonObject(k)?.optString("value") ?: ""
+                                            envList.add(Pair(k, v))
+                                        }
 
-                                    val kvs = prodCfg?.getAsJsonObject("kv_namespaces")
-                                    kvs?.keySet()?.forEach { k ->
-                                        val nsId = kvs.getAsJsonObject(k)?.get("namespace_id")?.asString ?: ""
-                                        kvBindingList.add(Pair(k, nsId))
-                                    }
+                                        val kvs = prodCfg?.optJsonObject("kv_namespaces")
+                                        kvs?.keySet()?.forEach { k ->
+                                            val nsId = kvs.optJsonObject(k)?.optString("namespace_id") ?: ""
+                                            kvBindingList.add(Pair(k, nsId))
+                                        }
 
-                                    val r2s = prodCfg?.getAsJsonObject("r2_buckets")
-                                    r2s?.keySet()?.forEach { k ->
-                                        val bName = r2s.getAsJsonObject(k)?.get("name")?.asString ?: ""
-                                        r2BindingList.add(Pair(k, bName))
-                                    }
+                                        val r2s = prodCfg?.optJsonObject("r2_buckets")
+                                        r2s?.keySet()?.forEach { k ->
+                                            val bName = r2s.optJsonObject(k)?.optString("name") ?: ""
+                                            r2BindingList.add(Pair(k, bName))
+                                        }
+                                    } catch (_: Exception) {}
 
                                     showConfigDialog = true
                                 },
@@ -663,7 +681,7 @@ fun PagesNodeLocScreen() {
         }
 
         // ==========================================
-        // SUB-TAB 1: ⚡ BULK DEPLOY (DENGAN DROP ZONE VISUAL)
+        // SUB-TAB 1: ⚡ BULK DEPLOY
         // ==========================================
         if (mainTab == 1) {
             item {
@@ -714,7 +732,6 @@ fun PagesNodeLocScreen() {
                             modifier = Modifier.fillMaxWidth()
                         )
 
-                        // DROP ZONE VISUAL UNTUK WORKER JS BULK
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -928,7 +945,6 @@ fun PagesNodeLocScreen() {
                     }
                 }
 
-                // FORM TAMBAH DNS NODELOC
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -1132,7 +1148,12 @@ fun PagesNodeLocScreen() {
         }
     }
 
-    // --- POP-UP MODAL: DEPLOY STUDIO (DENGAN DROP ZONE VISUAL) ---
+    // --- HELPER OPTIONAL EXTENSION ---
+    fun JsonObject.optJsonObject(key: String): JsonObject? = if (has(key) && !get(key).isJsonNull && get(key).isJsonObject) getJsonObject(key) else null
+    fun JsonObject.optJsonArray(key: String): JsonArray? = if (has(key) && !get(key).isJsonNull && get(key).isJsonArray) getAsJsonArray(key) else null
+    fun JsonObject.optString(key: String): String = if (has(key) && !get(key).isJsonNull) get(key).asString else ""
+
+    // --- POP-UP MODAL: DEPLOY STUDIO ---
     if (showDeployDialog) {
         AlertDialog(
             onDismissRequest = { if (!isProcessing) showDeployDialog = false },
@@ -1158,8 +1179,10 @@ fun PagesNodeLocScreen() {
                                 statusMsg = "Mengambil raw script..."
                                 try {
                                     val req = Request.Builder().url(rawFetchUrlInput).get().build()
-                                    val resp = withContext(Dispatchers.IO) { httpClient.newCall(req).execute() }
-                                    val scriptText = resp.body?.string() ?: ""
+                                    val scriptText = withContext(Dispatchers.IO) {
+                                        val resp = httpClient.newCall(req).execute()
+                                        resp.body?.string() ?: ""
+                                    }
                                     if (targetFetchInject == "worker") {
                                         rawWorkerScriptInput = scriptText
                                     } else {
@@ -1439,7 +1462,7 @@ fun PagesNodeLocScreen() {
         )
     }
 
-    // --- POP-UP MODAL: CUSTOM DOMAIN MANAGER & AUTO NODELOC SYNC ---
+    // --- POP-UP MODAL: CUSTOM DOMAIN MANAGER ---
     if (showDomainModal) {
         AlertDialog(
             onDismissRequest = { showDomainModal = false },
@@ -1600,8 +1623,10 @@ fun PagesNodeLocScreen() {
                                         .header("Accept", "application/dns-json")
                                         .get().build()
 
-                                    val resp = withContext(Dispatchers.IO) { httpClient.newCall(req).execute() }
-                                    val respStr = resp.body?.string() ?: ""
+                                    val respStr = withContext(Dispatchers.IO) {
+                                        val resp = httpClient.newCall(req).execute()
+                                        resp.body?.string() ?: ""
+                                    }
                                     val json = gson.fromJson(respStr, JsonObject::class.java)
                                     val status = json?.get("Status")?.asInt ?: -1
 
@@ -1648,8 +1673,10 @@ fun PagesNodeLocScreen() {
                                     .post(payload.toString().toRequestBody("application/json".toMediaTypeOrNull()))
                                     .build()
 
-                                val resp = withContext(Dispatchers.IO) { httpClient.newCall(req).execute() }
-                                val respStr = resp.body?.string() ?: ""
+                                val respStr = withContext(Dispatchers.IO) {
+                                    val resp = httpClient.newCall(req).execute()
+                                    resp.body?.string() ?: ""
+                                }
                                 val json = gson.fromJson(respStr, JsonObject::class.java)
 
                                 if (json != null && json.get("success")?.asBoolean == true) {
@@ -1658,7 +1685,7 @@ fun PagesNodeLocScreen() {
                                     newProjectName = ""
                                     loadPagesProjects()
                                 } else {
-                                    val err = json?.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + resp.code)
+                                    val err = json?.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: "Gagal buat project"
                                     statusMsg = "Gagal: $err"
                                 }
                             } catch (e: Exception) {
