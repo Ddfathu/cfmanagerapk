@@ -24,12 +24,14 @@ import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 data class R2BucketItem(val name: String, val creationDate: String = "")
+data class KvNamespaceItem(val id: String, val title: String)
 data class WorkerBindingUiItem(val name: String, val type: String, val target: String)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -44,9 +46,10 @@ fun R2Screen() {
     val apiKey = AppConfig.activeApiKey.ifBlank { currAcc?.apiKey ?: "" }
 
     var selectedTab by remember { mutableStateOf(0) }
-    val tabTitles = listOf("🪣 Bucket R2", "🔗 Binding Worker")
+    val tabTitles = listOf("🪣 Storage (R2 & KV)", "🔗 Binding Worker")
 
     var buckets by remember { mutableStateOf<List<R2BucketItem>>(emptyList()) }
+    var kvNamespaces by remember { mutableStateOf<List<KvNamespaceItem>>(emptyList()) }
     var workers by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedWorker by remember { mutableStateOf("") }
     var workerExpanded by remember { mutableStateOf(false) }
@@ -55,16 +58,19 @@ fun R2Screen() {
     var rawBindingsList by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
     var isLoadingBindings by remember { mutableStateOf(false) }
 
-    // Form Tambah Bucket
+    // Form Tambah Bucket R2 & KV Namespace
     var newBucketName by remember { mutableStateOf("") }
+    var newKvTitle by remember { mutableStateOf("") }
     var isCreatingBucket by remember { mutableStateOf(false) }
+    var isCreatingKv by remember { mutableStateOf(false) }
 
     // Form Tambah Binding
     var bindingType by remember { mutableStateOf("r2_bucket") }
     var bindingVarName by remember { mutableStateOf("MY_R2") }
     var selectedBucketForBind by remember { mutableStateOf("") }
+    var selectedKvForBind by remember { mutableStateOf("") }
     var bucketDropdownExpanded by remember { mutableStateOf(false) }
-    var manualTargetId by remember { mutableStateOf("") }
+    var kvDropdownExpanded by remember { mutableStateOf(false) }
     var isDeployingMultipart by remember { mutableStateOf(false) }
 
     var statusMsg by remember { mutableStateOf("") }
@@ -73,53 +79,77 @@ fun R2Screen() {
     val scope = rememberCoroutineScope()
     val gson = remember { Gson() }
 
-    fun loadBuckets() {
+    fun loadBucketsAndKv() {
         if (email.isBlank() || apiKey.isBlank()) return
         scope.launch {
             isLoading = true
             try {
                 val accId = CfAccountHelper.ensureAccountId()
-                val res = ApiClient.api.listR2Buckets(accId)
-                val bodyJson = res.body()
-                val isSuccess = bodyJson?.get("success")?.asBoolean == true
-                if (res.isSuccessful && isSuccess) {
-                    val resultObj = bodyJson?.getAsJsonObject("result")
-                    val bucketsArr = resultObj?.getAsJsonArray("buckets") ?: JsonArray()
-                    val list = mutableListOf<R2BucketItem>()
+                
+                // 1. Load R2 Buckets
+                val resR2 = ApiClient.api.listR2Buckets(accId)
+                val bodyR2 = resR2.body()
+                if (resR2.isSuccessful && bodyR2?.get("success")?.asBoolean == true) {
+                    val bucketsArr = bodyR2.getAsJsonObject("result")?.getAsJsonArray("buckets") ?: JsonArray()
+                    val listR2 = mutableListOf<R2BucketItem>()
                     bucketsArr.forEach {
                         val bObj = it.asJsonObject
                         val name = bObj.get("name")?.asString ?: ""
                         val date = bObj.get("creation_date")?.asString ?: ""
-                        if (name.isNotBlank()) list.add(R2BucketItem(name, date))
+                        if (name.isNotBlank()) listR2.add(R2BucketItem(name, date))
                     }
-                    buckets = list
-                    if (selectedBucketForBind.isBlank() && list.isNotEmpty()) {
-                        selectedBucketForBind = list[0].name
+                    buckets = listR2
+                    if (selectedBucketForBind.isBlank() && listR2.isNotEmpty()) {
+                        selectedBucketForBind = listR2[0].name
                     }
-                } else {
-                    val err = bodyJson?.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + res.code())
-                    statusMsg = "Gagal memuat bucket: " + err
                 }
+
+                // 2. Load KV Namespaces
+                val client = OkHttpClient()
+                val kvReq = Request.Builder()
+                    .url("https://api.cloudflare.com/client/v4/accounts/$accId/storage/kv/namespaces")
+                    .header("X-Auth-Email", email)
+                    .header("X-Auth-Key", apiKey)
+                    .get()
+                    .build()
+
+                val kvResp = withContext(Dispatchers.IO) { client.newCall(kvReq).execute() }
+                val kvRespStr = kvResp.body?.string() ?: ""
+                val kvJson = gson.fromJson(kvRespStr, JsonObject::class.java)
+
+                if (kvJson != null && kvJson.get("success")?.asBoolean == true) {
+                    val kvArr = kvJson.getAsJsonArray("result") ?: JsonArray()
+                    val listKv = mutableListOf<KvNamespaceItem>()
+                    kvArr.forEach {
+                        val kObj = it.asJsonObject
+                        val id = kObj.get("id")?.asString ?: ""
+                        val title = kObj.get("title")?.asString ?: ""
+                        if (id.isNotBlank()) listKv.add(KvNamespaceItem(id, title))
+                    }
+                    kvNamespaces = listKv
+                    if (selectedKvForBind.isBlank() && listKv.isNotEmpty()) {
+                        selectedKvForBind = listKv[0].id
+                    }
+                }
+
             } catch (e: Exception) {
-                statusMsg = "Error load buckets: " + e.message
+                statusMsg = "Error load R2/KV: " + e.message
             } finally {
                 isLoading = false
             }
         }
     }
 
-    // --- LOGIKA BINDINGS DENGAN FALLBACK MULTI-ENDPOINT ---
     fun loadBindings(workerName: String) {
         if (workerName.isBlank() || email.isBlank() || apiKey.isBlank()) return
         scope.launch {
             isLoadingBindings = true
-            statusMsg = "⏳ Mengambil daftar binding dari '$workerName'..."
+            statusMsg = "⏳ Mengambil daftar binding R2/KV dari '$workerName'..."
             try {
                 val accId = CfAccountHelper.ensureAccountId()
                 val client = OkHttpClient()
                 var rawResultList = mutableListOf<JsonObject>()
 
-                // 1. Coba Panggil Endpoint Direct Bindings
                 val bindingsReq = Request.Builder()
                     .url("https://api.cloudflare.com/client/v4/accounts/$accId/workers/scripts/$workerName/bindings")
                     .header("X-Auth-Email", email)
@@ -138,7 +168,6 @@ fun R2Screen() {
                     }
                 }
 
-                // 2. Jika Kosong / Gagal, Fallback ke Endpoint Settings
                 if (rawResultList.isEmpty()) {
                     val settingsReq = Request.Builder()
                         .url("https://api.cloudflare.com/client/v4/accounts/$accId/workers/scripts/$workerName/settings")
@@ -159,7 +188,6 @@ fun R2Screen() {
                     }
                 }
 
-                // 3. Parsing Seluruh Tipe Binding
                 rawBindingsList = rawResultList
                 val parsed = mutableListOf<WorkerBindingUiItem>()
 
@@ -167,36 +195,20 @@ fun R2Screen() {
                     val type = (obj.get("type")?.asString ?: "").lowercase()
                     val name = obj.get("name")?.asString ?: ""
 
-                    when (type) {
-                        "r2_bucket" -> {
-                            val target = obj.get("bucket_name")?.asString ?: ""
-                            parsed.add(WorkerBindingUiItem(name, "r2_bucket", target))
-                        }
-                        "kv_namespace" -> {
-                            val target = obj.get("namespace_id")?.asString ?: ""
-                            parsed.add(WorkerBindingUiItem(name, "kv_namespace", target))
-                        }
-                        "d1" -> {
-                            val target = obj.get("database_id")?.asString ?: ""
-                            parsed.add(WorkerBindingUiItem(name, "d1", target))
-                        }
-                        "plain_text", "secret_text" -> {
-                            val target = obj.get("text")?.asString ?: "******"
-                            parsed.add(WorkerBindingUiItem(name, type, target))
-                        }
-                        else -> {
-                            if (type.isNotBlank() && name.isNotBlank()) {
-                                parsed.add(WorkerBindingUiItem(name, type, "-"))
-                            }
-                        }
+                    if (type == "r2_bucket") {
+                        val target = obj.get("bucket_name")?.asString ?: ""
+                        parsed.add(WorkerBindingUiItem(name, "r2_bucket", target))
+                    } else if (type == "kv_namespace") {
+                        val target = obj.get("namespace_id")?.asString ?: ""
+                        parsed.add(WorkerBindingUiItem(name, "kv_namespace", target))
                     }
                 }
 
                 bindingList = parsed
                 if (parsed.isEmpty()) {
-                    statusMsg = "Worker '$workerName' belum memiliki binding yang terpasang."
+                    statusMsg = "Worker '$workerName' belum memiliki binding R2 atau KV."
                 } else {
-                    statusMsg = "✅ Berhasil memuat ${parsed.size} binding dari '$workerName'."
+                    statusMsg = "✅ Berhasil memuat ${parsed.size} binding R2/KV dari '$workerName'."
                 }
 
             } catch (e: Exception) {
@@ -229,7 +241,7 @@ fun R2Screen() {
 
     LaunchedEffect(email, apiKey) {
         if (email.isNotEmpty() && apiKey.isNotEmpty()) {
-            loadBuckets()
+            loadBucketsAndKv()
             loadWorkers()
         }
     }
@@ -253,12 +265,12 @@ fun R2Screen() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("💿 Cloudflare R2 & Bindings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("Kelola Bucket & Ikat ke Worker", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("💿 Cloudflare R2 & KV Manager", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Kelola Storage & Binding Worker", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                 }
                 IconButton(
                     onClick = {
-                        loadBuckets()
+                        loadBucketsAndKv()
                         loadWorkers()
                         if (selectedWorker.isNotBlank()) loadBindings(selectedWorker)
                     },
@@ -281,7 +293,7 @@ fun R2Screen() {
             }
         }
 
-        // --- SUB-TAB 0: DAFTAR & BUAT BUCKET R2 ---
+        // --- SUB-TAB 0: DAFTAR & BUAT BUCKET R2 / KV NAMESPACE ---
         if (selectedTab == 0) {
             item {
                 Card(
@@ -318,7 +330,7 @@ fun R2Screen() {
                                             if (res.isSuccessful && res.body()?.success == true) {
                                                 statusMsg = "✅ Bucket '$newBucketName' berhasil dibuat!"
                                                 newBucketName = ""
-                                                loadBuckets()
+                                                loadBucketsAndKv()
                                             } else {
                                                 val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
                                                 statusMsg = "Gagal: " + err
@@ -339,14 +351,80 @@ fun R2Screen() {
                 }
             }
 
+            // FITUR BARU: FORM BUAT KV NAMESPACE
             item {
-                Text("Daftar Bucket R2 Aktif (" + buckets.size + "):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text("➕ Buat KV Namespace Baru", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = newKvTitle,
+                                onValueChange = { newKvTitle = it.trim() },
+                                label = { Text("Nama/Title KV Namespace") },
+                                placeholder = { Text("cth: CONFIG_KV") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Button(
+                                onClick = {
+                                    if (newKvTitle.isBlank()) return@Button
+                                    scope.launch {
+                                        isCreatingKv = true
+                                        statusMsg = "Membuat KV Namespace '$newKvTitle'..."
+                                        try {
+                                            val accId = CfAccountHelper.ensureAccountId()
+                                            val client = OkHttpClient()
+                                            val payload = JsonObject().apply { addProperty("title", newKvTitle) }
+
+                                            val req = Request.Builder()
+                                                .url("https://api.cloudflare.com/client/v4/accounts/$accId/storage/kv/namespaces")
+                                                .header("X-Auth-Email", email)
+                                                .header("X-Auth-Key", apiKey)
+                                                .header("Content-Type", "application/json")
+                                                .post(payload.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+                                                .build()
+
+                                            val resp = withContext(Dispatchers.IO) { client.newCall(req).execute() }
+                                            val respStr = resp.body?.string() ?: ""
+                                            val json = gson.fromJson(respStr, JsonObject::class.java)
+
+                                            if (json != null && json.get("success")?.asBoolean == true) {
+                                                statusMsg = "✅ KV Namespace '$newKvTitle' berhasil dibuat!"
+                                                newKvTitle = ""
+                                                loadBucketsAndKv()
+                                            } else {
+                                                val err = json?.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + resp.code)
+                                                statusMsg = "Gagal: " + err
+                                            }
+                                        } catch (e: Exception) {
+                                            statusMsg = "Error: " + e.message
+                                        } finally {
+                                            isCreatingKv = false
+                                        }
+                                    }
+                                },
+                                enabled = !isCreatingKv && newKvTitle.isNotBlank(),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF9333EA))
+                            ) {
+                                Text(if (isCreatingKv) "..." else "Buat KV")
+                            }
+                        }
+                    }
+                }
             }
 
-            if (buckets.isEmpty() && !isLoading) {
-                item {
-                    Text("Belum ada bucket R2 di akun ini.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                }
+            item {
+                Text("Daftar Storage Aktif:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             }
 
             items(buckets) { b ->
@@ -361,9 +439,9 @@ fun R2Screen() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column {
-                            Text("💿 " + b.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            Text("💿 R2: " + b.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                             if (b.creationDate.isNotBlank()) {
-                                Text(b.creationDate.take(10), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                                Text("Dibuat: " + b.creationDate.take(10), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                             }
                         }
 
@@ -375,9 +453,61 @@ fun R2Screen() {
                                     val res = ApiClient.api.deleteR2Bucket(accId, b.name)
                                     if (res.isSuccessful && res.body()?.success == true) {
                                         statusMsg = "🗑 Bucket '" + b.name + "' berhasil dihapus!"
-                                        loadBuckets()
+                                        loadBucketsAndKv()
                                     } else {
                                         val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                        statusMsg = "Gagal hapus: " + err
+                                    }
+                                } catch (e: Exception) {
+                                    statusMsg = "Error: " + e.message
+                                }
+                            }
+                        }) {
+                            Text("🗑")
+                        }
+                    }
+                }
+            }
+
+            items(kvNamespaces) { kv ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("📦 KV: " + kv.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            Text("ID: " + kv.id, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.outline)
+                        }
+
+                        IconButton(onClick = {
+                            scope.launch {
+                                statusMsg = "Menghapus KV Namespace " + kv.title + "..."
+                                try {
+                                    val accId = CfAccountHelper.ensureAccountId()
+                                    val client = OkHttpClient()
+
+                                    val req = Request.Builder()
+                                        .url("https://api.cloudflare.com/client/v4/accounts/$accId/storage/kv/namespaces/${kv.id}")
+                                        .header("X-Auth-Email", email)
+                                        .header("X-Auth-Key", apiKey)
+                                        .delete()
+                                        .build()
+
+                                    val resp = withContext(Dispatchers.IO) { client.newCall(req).execute() }
+                                    val respStr = resp.body?.string() ?: ""
+                                    val json = gson.fromJson(respStr, JsonObject::class.java)
+
+                                    if (json != null && json.get("success")?.asBoolean == true) {
+                                        statusMsg = "🗑 KV Namespace '" + kv.title + "' dihapus!"
+                                        loadBucketsAndKv()
+                                    } else {
+                                        val err = json?.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + resp.code)
                                         statusMsg = "Gagal hapus: " + err
                                     }
                                 } catch (e: Exception) {
@@ -506,14 +636,41 @@ fun R2Screen() {
                                 Text("⚠️ Belum ada bucket R2. Buat bucket di tab sebelah dulu.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                             }
                         } else {
-                            OutlinedTextField(
-                                value = manualTargetId,
-                                onValueChange = { manualTargetId = it.trim() },
-                                label = { Text("ID Namespace KV (32 Karakter Hex)") },
-                                placeholder = { Text("Contoh: 0f2b38c...") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                            // AUTO DROPDOWN DARI KVM NAMESPACES BANYAK
+                            if (kvNamespaces.isNotEmpty()) {
+                                val selectedKvObj = kvNamespaces.find { it.id == selectedKvForBind }
+                                val kvLabel = if (selectedKvObj != null) "${selectedKvObj.title} (${selectedKvObj.id.take(8)}...)" else "Pilih KV Namespace..."
+
+                                ExposedDropdownMenuBox(
+                                    expanded = kvDropdownExpanded,
+                                    onExpandedChange = { kvDropdownExpanded = !kvDropdownExpanded }
+                                ) {
+                                    OutlinedTextField(
+                                        value = kvLabel,
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        label = { Text("Target KV Namespace") },
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = kvDropdownExpanded) },
+                                        modifier = Modifier.menuAnchor().fillMaxWidth()
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = kvDropdownExpanded,
+                                        onDismissRequest = { kvDropdownExpanded = false }
+                                    ) {
+                                        kvNamespaces.forEach { kv ->
+                                            DropdownMenuItem(
+                                                text = { Text("📦 ${kv.title} (${kv.id.take(8)}...)") },
+                                                onClick = {
+                                                    selectedKvForBind = kv.id
+                                                    kvDropdownExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                Text("⚠️ Belum ada KV Namespace. Buat KV Namespace terlebih dahulu.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(14.dp))
@@ -533,8 +690,8 @@ fun R2Screen() {
                                     statusMsg = "Pilih bucket R2 terlebih dahulu!"
                                     return@Button
                                 }
-                                if (bindingType == "kv_namespace" && manualTargetId.isBlank()) {
-                                    statusMsg = "ID Namespace KV tidak boleh kosong!"
+                                if (bindingType == "kv_namespace" && selectedKvForBind.isBlank()) {
+                                    statusMsg = "Pilih KV Namespace terlebih dahulu!"
                                     return@Button
                                 }
 
@@ -545,8 +702,7 @@ fun R2Screen() {
                                         val accId = CfAccountHelper.ensureAccountId()
                                         val client = OkHttpClient()
 
-                                        val existingList = rawBindingsList.toMutableList()
-                                        val filteredList = existingList.filter {
+                                        val filteredList = rawBindingsList.filter {
                                             val name = it.get("name")?.asString
                                             !(name.equals(bindingVarName, ignoreCase = true))
                                         }.toMutableList()
@@ -557,33 +713,39 @@ fun R2Screen() {
                                             if (bindingType == "r2_bucket") {
                                                 addProperty("bucket_name", selectedBucketForBind)
                                             } else {
-                                                addProperty("namespace_id", manualTargetId)
+                                                addProperty("namespace_id", selectedKvForBind)
                                             }
                                         }
                                         filteredList.add(newBindingObj)
 
-                                        val patchPayload = JsonObject().apply {
+                                        val settingsObj = JsonObject().apply {
                                             add("bindings", gson.toJsonTree(filteredList))
                                         }
+
+                                        val settingsRequestBody = settingsObj.toString()
+                                            .toRequestBody("application/json".toMediaTypeOrNull())
+
+                                        val multipartBody = MultipartBody.Builder()
+                                            .setType(MultipartBody.FORM)
+                                            .addFormDataPart("settings", "settings.json", settingsRequestBody)
+                                            .build()
 
                                         val patchReq = Request.Builder()
                                             .url("https://api.cloudflare.com/client/v4/accounts/$accId/workers/scripts/$w/settings")
                                             .header("X-Auth-Email", email)
                                             .header("X-Auth-Key", apiKey)
-                                            .header("Content-Type", "application/json")
-                                            .patch(patchPayload.toString().toRequestBody("application/json".toMediaType()))
+                                            .patch(multipartBody)
                                             .build()
 
                                         val patchResp = withContext(Dispatchers.IO) { client.newCall(patchReq).execute() }
                                         val patchRespStr = patchResp.body?.string() ?: ""
                                         val patchJson = gson.fromJson(patchRespStr, JsonObject::class.java)
 
-                                        if (patchJson.get("success")?.asBoolean == true) {
+                                        if (patchJson != null && patchJson.get("success")?.asBoolean == true) {
                                             statusMsg = "✅ Sukses pasang binding env.$bindingVarName di '$w'!"
                                             loadBindings(w)
-                                            manualTargetId = ""
                                         } else {
-                                            val err = patchJson.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + patchResp.code)
+                                            val err = patchJson?.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + patchResp.code)
                                             statusMsg = "❌ Gagal binding: $err"
                                         }
                                     } catch (e: Exception) {
@@ -610,7 +772,7 @@ fun R2Screen() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Daftar Binding Aktif di Worker '" + selectedWorker + "' (" + bindingList.size + "):",
+                        text = "Daftar Binding R2 & KV Aktif di Worker '" + selectedWorker + "' (" + bindingList.size + "):",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -623,7 +785,7 @@ fun R2Screen() {
             if (bindingList.isEmpty() && !isLoadingBindings) {
                 item {
                     Text(
-                        text = if (selectedWorker.isBlank()) "Silakan pilih worker terlebih dahulu di atas." else "Tidak ada binding R2/KV/D1 yang terpasang di worker ini.",
+                        text = if (selectedWorker.isBlank()) "Silakan pilih worker terlebih dahulu di atas." else "Tidak ada binding R2 atau KV yang terpasang di worker ini.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline
                     )
@@ -631,16 +793,10 @@ fun R2Screen() {
             }
 
             items(bindingList) { b ->
-                val typeClean = b.type.lowercase()
-                val isR2 = (typeClean == "r2_bucket")
-                val badgeColor = when (typeClean) {
-                    "r2_bucket" -> Color(0xFFEA580C)
-                    "kv_namespace" -> Color(0xFF9333EA)
-                    "d1" -> Color(0xFF059669)
-                    else -> Color(0xFF475569)
-                }
+                val isR2 = (b.type == "r2_bucket")
+                val badgeColor = if (isR2) Color(0xFFEA580C) else Color(0xFF9333EA)
                 val badgeBg = badgeColor.copy(alpha = 0.12f)
-                val badgeText = typeClean.uppercase().replace("_", " ")
+                val badgeText = if (isR2) "R2 BUCKET (💿)" else "KV NAMESPACE (📦)"
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -692,27 +848,34 @@ fun R2Screen() {
                                         !(it.get("name")?.asString.equals(b.name, ignoreCase = true)) 
                                     }
 
-                                    val patchPayload = JsonObject().apply {
+                                    val settingsObj = JsonObject().apply {
                                         add("bindings", gson.toJsonTree(filtered))
                                     }
+
+                                    val settingsRequestBody = settingsObj.toString()
+                                        .toRequestBody("application/json".toMediaTypeOrNull())
+
+                                    val multipartBody = MultipartBody.Builder()
+                                        .setType(MultipartBody.FORM)
+                                        .addFormDataPart("settings", "settings.json", settingsRequestBody)
+                                        .build()
 
                                     val patchReq = Request.Builder()
                                         .url("https://api.cloudflare.com/client/v4/accounts/$accId/workers/scripts/$selectedWorker/settings")
                                         .header("X-Auth-Email", email)
                                         .header("X-Auth-Key", apiKey)
-                                        .header("Content-Type", "application/json")
-                                        .patch(patchPayload.toString().toRequestBody("application/json".toMediaType()))
+                                        .patch(multipartBody)
                                         .build()
 
                                     val patchResp = withContext(Dispatchers.IO) { client.newCall(patchReq).execute() }
                                     val patchRespStr = patchResp.body?.string() ?: ""
                                     val patchJson = gson.fromJson(patchRespStr, JsonObject::class.java)
 
-                                    if (patchJson.get("success")?.asBoolean == true) {
+                                    if (patchJson != null && patchJson.get("success")?.asBoolean == true) {
                                         statusMsg = "🗑 Binding env." + b.name + " berhasil dicopot!"
                                         loadBindings(selectedWorker)
                                     } else {
-                                        val err = patchJson.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + patchResp.code)
+                                        val err = patchJson?.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + patchResp.code)
                                         statusMsg = "❌ Gagal mencopot: $err"
                                     }
                                 } catch (e: Exception) {
