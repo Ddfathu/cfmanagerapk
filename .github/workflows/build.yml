@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build Release/Debug APK
+    name: Build & Sign Release APK
     runs-on: ubuntu-latest
 
     steps:
@@ -17,7 +17,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 2. Setup JDK 17 (Standar compile Android modern & Jetpack Compose)
+      # 2. Setup JDK 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -29,7 +29,7 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      # 4. Berikan izin eksekusi pada wrapper gradlew & pastikan binary jar terunduh jika belum ada
+      # 4. Prepare Gradle Wrapper
       - name: Prepare Gradle Wrapper
         run: |
           chmod +x ./gradlew || true
@@ -39,15 +39,26 @@ jobs:
             curl -sLo gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.5.0/gradle/wrapper/gradle-wrapper.jar || true
           fi
 
-      # 5. Compile APK menggunakan Gradle Wrapper
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace --no-daemon
+      # 5. Compile APK Release
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --stacktrace --no-daemon
 
-      # 6. Upload hasil compile APK sebagai Artifact GitHub Actions
+      # 6. Auto Sign APK Pake Keystore Permanen
+      - name: Sign APK Automatically
+        uses: r0adkll/sign-android-release@v1
+        id: sign_app
+        with:
+          releaseDirectory: app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          alias: my-alias
+          keyStorePassword: '123456'
+          keyPassword: '123456'
+
+      # 7. Upload Hasil APK Release Ter-sign
       - name: Upload Artifact APK
         uses: actions/upload-artifact@v4
         with:
-          name: CF-Manager-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: CF-Manager-Release-APK
+          path: ${{ steps.sign_app.outputs.signedReleaseFile }}
           if-no-files-found: error
           retention-days: 14
