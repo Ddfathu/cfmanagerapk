@@ -103,10 +103,31 @@ interface WorkerApi {
         @Part settings: MultipartBody.Part
     ): Response<CfStandardResponse>
 
+    // --- WORKER SECRETS & VARIABLES ---
+    @GET("accounts/{accountId}/workers/services/{serviceName}/environments/production/bindings")
+    suspend fun listWorkerSecrets(
+        @Path("accountId") accountId: String,
+        @Path("serviceName") serviceName: String
+    ): Response<CfBindingListResponse>
+
+    @PUT("accounts/{accountId}/workers/services/{serviceName}/environments/production/secrets")
+    suspend fun putWorkerSecret(
+        @Path("accountId") accountId: String,
+        @Path("serviceName") serviceName: String,
+        @Body body: Map<String, Any>
+    ): Response<CfStandardResponse>
+
+    @DELETE("accounts/{accountId}/workers/services/{serviceName}/environments/production/secrets/{secretName}")
+    suspend fun deleteWorkerSecret(
+        @Path("accountId") accountId: String,
+        @Path("serviceName") serviceName: String,
+        @Path("secretName") secretName: String
+    ): Response<CfStandardResponse>
+
     @GET("memberships")
     suspend fun listMemberships(): Response<CfListResponse<JsonObject>>
 
-    // --- ZONES & DNS (Dikembalikan ke Tipe Model Spesifik UI) ---
+    // --- ZONES & DNS ---
     @GET("zones")
     suspend fun listZones(@Query("account.id") accountId: String? = null): Response<CfListResponse<ZoneItem>>
 
@@ -128,6 +149,32 @@ interface WorkerApi {
     @DELETE("zones/{zoneId}/dns_records/{recordId}")
     suspend fun deleteDns(@Path("zoneId") zoneId: String, @Path("recordId") recordId: String): Response<CfStandardResponse>
 
+    // --- SSL / UNIVERSAL CA ---
+    @GET("zones/{zoneId}/ssl/universal/settings")
+    suspend fun getUniversalSslSettings(@Path("zoneId") zoneId: String): Response<CfStandardResponse>
+
+    @PATCH("zones/{zoneId}/ssl/universal/settings")
+    suspend fun updateUniversalSslSettings(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    @POST("zones/{zoneId}/ssl/universal/settings")
+    suspend fun reorderSslVerification(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    // --- EMAIL ROUTING ---
+    @GET("accounts/{accountId}/email/routing/addresses")
+    suspend fun listEmailDestinations(@Path("accountId") accountId: String): Response<CfListResponse<JsonObject>>
+
+    @GET("zones/{zoneId}/email/routing/rules")
+    suspend fun listEmailRules(@Path("zoneId") zoneId: String): Response<CfListResponse<JsonObject>>
+
+    @GET("zones/{zoneId}/email/routing/rules/catch_all")
+    suspend fun getEmailCatchAll(@Path("zoneId") zoneId: String): Response<CfStandardResponse>
+
+    @POST("zones/{zoneId}/email/routing/rules")
+    suspend fun createEmailRule(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    @DELETE("zones/{zoneId}/email/routing/rules/{ruleId}")
+    suspend fun deleteEmailRule(@Path("zoneId") zoneId: String, @Path("ruleId") ruleId: String): Response<CfStandardResponse>
+
     // --- TUNNELS ---
     @GET("accounts/{accountId}/cfd_tunnel")
     suspend fun listTunnels(@Path("accountId") accountId: String, @Query("is_deleted") isDeleted: Boolean = false): Response<CfListResponse<JsonObject>>
@@ -146,6 +193,26 @@ interface WorkerApi {
 
     @PUT("accounts/{accountId}/cfd_tunnel/{tunnelId}/configurations")
     suspend fun updateTunnelConfigurations(@Path("accountId") accountId: String, @Path("tunnelId") tunnelId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    
+    // --- CLOUDFLARE PAGES ---
+    @GET("accounts/{accountId}/pages/projects")
+    suspend fun listPagesProjects(@Path("accountId") accountId: String): Response<CfListResponse<JsonObject>>
+
+    @POST("accounts/{accountId}/pages/projects")
+    suspend fun createPagesProject(@Path("accountId") accountId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    @DELETE("accounts/{accountId}/pages/projects/{projectName}")
+    suspend fun deletePagesProject(@Path("accountId") accountId: String, @Path("projectName") projectName: String): Response<CfStandardResponse>
+
+    @GET("accounts/{accountId}/pages/projects/{projectName}/domains")
+    suspend fun listPagesCustomDomains(@Path("accountId") accountId: String, @Path("projectName") projectName: String): Response<CfListResponse<JsonObject>>
+
+    @POST("accounts/{accountId}/pages/projects/{projectName}/domains")
+    suspend fun addPagesCustomDomain(@Path("accountId") accountId: String, @Path("projectName") projectName: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    @DELETE("accounts/{accountId}/pages/projects/{projectName}/domains/{domainName}")
+    suspend fun deletePagesCustomDomain(@Path("accountId") accountId: String, @Path("projectName") projectName: String, @Path("domainName") domainName: String): Response<CfStandardResponse>
 
     // --- R2 ---
     @GET("accounts/{accountId}/r2/buckets")
