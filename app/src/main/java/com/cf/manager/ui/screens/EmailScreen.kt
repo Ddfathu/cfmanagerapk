@@ -121,7 +121,8 @@ fun EmailScreen() {
                 // Load Catch-All
                 val resCatch = ApiClient.api.getEmailCatchAll(zoneId)
                 if (resCatch.isSuccessful && resCatch.body()?.success == true) {
-                    val rObj = resCatch.body()?.result
+                    val rElement = resCatch.body()?.result
+                    val rObj = if (rElement?.isJsonObject == true) rElement.asJsonObject else null
                     catchAllEnabled = rObj?.get("enabled")?.asBoolean ?: false
                     val actions = rObj?.getAsJsonArray("actions")
                     actions?.forEach { a ->

@@ -77,8 +77,10 @@ fun R2Screen() {
             try {
                 val accId = CfAccountHelper.ensureAccountId()
                 val res = ApiClient.api.listR2Buckets(accId)
-                if (res.isSuccessful && res.body()?.success == true) {
-                    val resultObj = res.body()?.result
+                val bodyJson = res.body()
+                val isSuccess = bodyJson?.get("success")?.asBoolean == true
+                if (res.isSuccessful && isSuccess) {
+                    val resultObj = bodyJson?.getAsJsonObject("result")
                     val bucketsArr = resultObj?.getAsJsonArray("buckets") ?: JsonArray()
                     val list = mutableListOf<R2BucketItem>()
                     bucketsArr.forEach {

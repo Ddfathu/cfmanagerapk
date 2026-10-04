@@ -19,7 +19,6 @@ import com.cf.manager.data.AppConfig
 import com.cf.manager.data.api.ApiClient
 import com.cf.manager.data.local.AccountStorage
 import com.cf.manager.data.model.ZoneItem
-import com.google.gson.JsonObject
 import kotlinx.coroutines.launch
 
 data class ZoneSslStatusItem(
@@ -106,7 +105,9 @@ fun SslScreen() {
                         try {
                             val caRes = ApiClient.api.getUniversalSslSettings(item.zone.id)
                             if (caRes.isSuccessful && caRes.body()?.success == true) {
-                                val ca = caRes.body()?.result?.get("certificate_authority")?.asString ?: "google"
+                                val resultJson = caRes.body()?.result
+                                val caObj = if (resultJson?.isJsonObject == true) resultJson.asJsonObject else null
+                                val ca = caObj?.get("certificate_authority")?.asString ?: "google"
                                 val displayCa = if (ca.contains("lets_encrypt", ignoreCase = true)) "Let's Encrypt" else "Google CA"
                                 item.caProvider = displayCa
                             }

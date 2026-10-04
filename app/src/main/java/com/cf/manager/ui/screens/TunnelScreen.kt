@@ -26,8 +26,6 @@ import com.cf.manager.data.api.CfAccountHelper
 import com.cf.manager.data.local.AccountStorage
 import com.cf.manager.data.model.TunnelItem
 import com.cf.manager.data.model.ZoneItem
-import com.google.gson.JsonArray
-import com.google.gson.JsonObject
 import kotlinx.coroutines.launch
 
 data class IngressRuleItem(
@@ -136,11 +134,18 @@ fun TunnelScreen() {
 
                 val resT = ApiClient.api.listTunnels(accId)
                 if (resT.isSuccessful && resT.body()?.success == true) {
-                    val list = resT.body()?.result ?: emptyList()
-                    tunnels = list
-                    if (selectedTunnel == null && list.isNotEmpty()) {
-                        selectedTunnel = list[0]
-                        loadIngressRules(list[0].id)
+                    val rawList = resT.body()?.result ?: emptyList()
+                    val mappedList = rawList.map { obj ->
+                        TunnelItem(
+                            id = obj.get("id")?.asString ?: "",
+                            name = obj.get("name")?.asString ?: "",
+                            status = obj.get("status")?.asString ?: "inactive"
+                        )
+                    }
+                    tunnels = mappedList
+                    if (selectedTunnel == null && mappedList.isNotEmpty()) {
+                        selectedTunnel = mappedList[0]
+                        loadIngressRules(mappedList[0].id)
                     }
                 }
 
@@ -153,7 +158,7 @@ fun TunnelScreen() {
                     }
                 }
             } catch (e: Exception) {
-                statusMsg = "Error: ${e.message}"
+                statusMsg = "Error: \${e.message}"
             } finally {
                 isLoading = false
             }
@@ -212,7 +217,7 @@ fun TunnelScreen() {
                                 if (tunnelNameInput.isBlank()) return@Button
                                 scope.launch {
                                     isCreating = true
-                                    statusMsg = "Membuat tunnel '${tunnelNameInput}'..."
+                                    statusMsg = "Membuat tunnel '\$tunnelNameInput'..."
                                     try {
                                         val accId = CfAccountHelper.ensureAccountId()
                                         val payload = mapOf(
@@ -221,15 +226,15 @@ fun TunnelScreen() {
                                         )
                                         val res = ApiClient.api.createTunnel(accId, payload)
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "✅ Tunnel '${tunnelNameInput}' berhasil dibuat!"
+                                            statusMsg = "✅ Tunnel '\$tunnelNameInput' berhasil dibuat!"
                                             tunnelNameInput = ""
                                             loadData()
                                         } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                                            statusMsg = "Gagal: $err"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP \${res.code()}"
+                                            statusMsg = "Gagal: \$err"
                                         }
                                     } catch (e: Exception) {
-                                        statusMsg = "Error: ${e.message}"
+                                        statusMsg = "Error: \${e.message}"
                                     } finally {
                                         isCreating = false
                                     }
@@ -290,7 +295,7 @@ fun TunnelScreen() {
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text("🔗 Tambah Public Hostname (Ingress Route)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    Text("Target Tunnel: ${selectedTunnel?.name ?: "(Pilih Tunnel di bawah)"}", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Text("Target Tunnel: \${selectedTunnel?.name ?: "(Pilih Tunnel di bawah)"}", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.height(10.dp))
 
                     ExposedDropdownMenuBox(
@@ -366,11 +371,11 @@ fun TunnelScreen() {
                             scope.launch {
                                 isRouting = true
                                 val accId = CfAccountHelper.ensureAccountId()
-                                val fullHost = if (subDomainInput.isBlank() || subDomainInput == "@") zon.name else "${subDomainInput}.${zon.name}"
+                                val fullHost = if (subDomainInput.isBlank() || subDomainInput == "@") zon.name else "\${subDomainInput}.\${zon.name}"
                                 val fullService = if (serviceUrlInput.startsWith("http://") || serviceUrlInput.startsWith("https://") || serviceUrlInput.startsWith("tcp://")) {
                                     serviceUrlInput
                                 } else {
-                                    "$serviceType$serviceUrlInput"
+                                    "\$serviceType\$serviceUrlInput"
                                 }
 
                                 statusMsg = "Menyimpan ingress config ke Cloudflare..."
@@ -387,17 +392,17 @@ fun TunnelScreen() {
                                     val dnsPayload = mapOf(
                                         "type" to "CNAME",
                                         "name" to fullHost,
-                                        "content" to "${tun.id}.cfargotunnel.com",
+                                        "content" to "\${tun.id}.cfargotunnel.com",
                                         "ttl" to 1,
                                         "proxied" to true
                                     )
                                     ApiClient.api.createDns(zon.id, dnsPayload)
 
-                                    statusMsg = "✅ Hostname '$fullHost' berhasil ditambahkan!"
+                                    statusMsg = "✅ Hostname '\$fullHost' berhasil ditambahkan!"
                                     subDomainInput = ""
                                     loadIngressRules(tun.id)
                                 } catch (e: Exception) {
-                                    statusMsg = "Error: ${e.message}"
+                                    statusMsg = "Error: \${e.message}"
                                 } finally {
                                     isRouting = false
                                 }
@@ -418,7 +423,7 @@ fun TunnelScreen() {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Daftar Tunnel (${tunnels.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("Daftar Tunnel (\${tunnels.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text("Ketuk kartu untuk buka Ingress", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             }
         }
@@ -484,7 +489,7 @@ fun TunnelScreen() {
 
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "ID: ${t.id}",
+                        text = "ID: \${t.id}",
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.outline
@@ -501,16 +506,21 @@ fun TunnelScreen() {
                             onClick = {
                                 selectedTunnel = t
                                 scope.launch {
-                                    statusMsg = "Mengambil token '${t.name}'..."
+                                    statusMsg = "Mengambil token '\${t.name}'..."
                                     try {
                                         val accId = CfAccountHelper.ensureAccountId()
                                         val res = ApiClient.api.getTunnelToken(accId, t.id)
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            activeToken = res.body()?.result ?: ""
-                                            statusMsg = "✅ Token tunnel '${t.name}' dimuat!"
+                                            val tokenVal = res.body()?.result
+                                            activeToken = when {
+                                                tokenVal?.isJsonPrimitive == true -> tokenVal.asString
+                                                tokenVal != null -> tokenVal.toString()
+                                                else -> ""
+                                            }
+                                            statusMsg = "✅ Token tunnel '\${t.name}' dimuat!"
                                         }
                                     } catch (e: Exception) {
-                                        statusMsg = "Error: ${e.message}"
+                                        statusMsg = "Error: \${e.message}"
                                     }
                                 }
                             },
@@ -541,7 +551,7 @@ fun TunnelScreen() {
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Text(
-                            text = "🌐 Ingress Routes Aktif (${ingressRules.size}):",
+                            text = "🌐 Ingress Routes Aktif (\${ingressRules.size}):",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -569,7 +579,7 @@ fun TunnelScreen() {
                                         ) {
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Text(rule.hostname, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                                                Text("➡ ${rule.service}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
+                                                Text("➡ \${rule.service}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
                                             }
 
                                             Row {
@@ -586,7 +596,7 @@ fun TunnelScreen() {
                                                 IconButton(
                                                     onClick = {
                                                         scope.launch {
-                                                            statusMsg = "Menghapus rule ${rule.hostname}..."
+                                                            statusMsg = "Menghapus rule \${rule.hostname}..."
                                                             try {
                                                                 val accId = CfAccountHelper.ensureAccountId()
                                                                 val updatedList = ingressRules.filter { it.hostname != rule.hostname }
@@ -596,11 +606,11 @@ fun TunnelScreen() {
                                                                 val payload = mapOf("config" to mapOf("ingress" to ingressArr))
                                                                 val res = ApiClient.api.updateTunnelConfigurations(accId, t.id, payload)
                                                                 if (res.isSuccessful && res.body()?.success == true) {
-                                                                    statusMsg = "🗑 Rule ${rule.hostname} dihapus!"
+                                                                    statusMsg = "🗑 Rule \${rule.hostname} dihapus!"
                                                                     loadIngressRules(t.id)
                                                                 }
                                                             } catch (e: Exception) {
-                                                                statusMsg = "Error: ${e.message}"
+                                                                statusMsg = "Error: \${e.message}"
                                                             }
                                                         }
                                                     },
@@ -642,7 +652,7 @@ fun TunnelScreen() {
             title = { Text("Edit Ingress Route", fontWeight = FontWeight.Bold) },
             text = {
                 Column {
-                    Text("Hostname: ${targetRule.hostname}", fontWeight = FontWeight.SemiBold)
+                    Text("Hostname: \${targetRule.hostname}", fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = editServiceInput,
@@ -660,7 +670,7 @@ fun TunnelScreen() {
                         val tun = selectedTunnel ?: return@Button
                         scope.launch {
                             isSavingRule = true
-                            statusMsg = "Memperbarui service untuk ${targetRule.hostname}..."
+                            statusMsg = "Memperbarui service untuk \${targetRule.hostname}..."
                             try {
                                 val accId = CfAccountHelper.ensureAccountId()
                                 val updatedList = ingressRules.map {
@@ -672,14 +682,14 @@ fun TunnelScreen() {
                                 val payload = mapOf("config" to mapOf("ingress" to ingressArr))
                                 val res = ApiClient.api.updateTunnelConfigurations(accId, tun.id, payload)
                                 if (res.isSuccessful && res.body()?.success == true) {
-                                    statusMsg = "✅ Ingress ${targetRule.hostname} berhasil diupdate!"
+                                    statusMsg = "✅ Ingress \${targetRule.hostname} berhasil diupdate!"
                                     editingRule = null
                                     loadIngressRules(tun.id)
                                 } else {
-                                    statusMsg = "Gagal update: HTTP ${res.code()}"
+                                    statusMsg = "Gagal update: HTTP \${res.code()}"
                                 }
                             } catch (e: Exception) {
-                                statusMsg = "Error: ${e.message}"
+                                statusMsg = "Error: \${e.message}"
                             } finally {
                                 isSavingRule = false
                             }
@@ -703,22 +713,22 @@ fun TunnelScreen() {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text("Hapus Tunnel?") },
-            text = { Text("Yakin ingin menghapus tunnel '${target.name}' (${target.id}) dari Cloudflare?") },
+            text = { Text("Yakin ingin menghapus tunnel '\${target.name}' (\${target.id}) dari Cloudflare?") },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteDialog = false
                     scope.launch {
-                        statusMsg = "Menghapus tunnel '${target.name}'..."
+                        statusMsg = "Menghapus tunnel '\${target.name}'..."
                         try {
                             val accId = CfAccountHelper.ensureAccountId()
                             val res = ApiClient.api.deleteTunnel(accId, target.id)
                             if (res.isSuccessful && res.body()?.success == true) {
-                                statusMsg = "🗑 Tunnel '${target.name}' berhasil dihapus!"
+                                statusMsg = "🗑 Tunnel '\${target.name}' berhasil dihapus!"
                                 if (selectedTunnel?.id == target.id) selectedTunnel = null
                                 loadData()
                             }
                         } catch (e: Exception) {
-                            statusMsg = "Error: ${e.message}"
+                            statusMsg = "Error: \${e.message}"
                         }
                     }
                 }) {

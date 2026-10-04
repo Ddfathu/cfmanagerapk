@@ -164,7 +164,9 @@ fun WorkerEditorScreen() {
                 try {
                     val subRes = ApiClient.api.getAccountSubdomain(accId)
                     if (subRes.isSuccessful && subRes.body()?.success == true) {
-                        accountSubdomain = subRes.body()?.result?.get("subdomain")?.asString ?: ""
+                        val subElement = subRes.body()?.result
+                        val subObj = if (subElement?.isJsonObject == true) subElement.asJsonObject else null
+                        accountSubdomain = subObj?.get("subdomain")?.asString ?: ""
                     }
                 } catch (_: Exception) {}
 
@@ -332,7 +334,8 @@ fun WorkerEditorScreen() {
                                         try {
                                             val setRes = ApiClient.api.getWorkerSettings(accId, wName)
                                             if (setRes.isSuccessful && setRes.body()?.success == true) {
-                                                val resObj = setRes.body()?.result
+                                                val resElement = setRes.body()?.result
+                                                val resObj = if (resElement?.isJsonObject == true) resElement.asJsonObject else null
                                                 val cDate = resObj?.get("compatibility_date")?.asString
                                                 if (!cDate.isNullOrBlank()) editCompatDate = cDate
                                                 val flags = resObj?.getAsJsonArray("compatibility_flags")?.map { it.asString } ?: emptyList()
@@ -969,7 +972,7 @@ fun WorkerEditorScreen() {
                                 statusMsg = "Gagal menghapus: $err"
                             }
                         } catch (e: Exception) {
-                            statusMsg = "Error: \${e.message}"
+                            statusMsg = "Error: ${e.message}"
                         }
                     }
                 }) {

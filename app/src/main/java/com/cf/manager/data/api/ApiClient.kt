@@ -84,6 +84,13 @@ interface WorkerApi {
         @Path("scriptName") scriptName: String
     ): Response<CfStandardResponse>
 
+    @PUT("accounts/{accountId}/workers/services/{scriptName}/environments/production/settings")
+    suspend fun updateWorkerSettings(
+        @Path("accountId") accountId: String,
+        @Path("scriptName") scriptName: String,
+        @Body body: Map<String, Any>
+    ): Response<CfStandardResponse>
+
     @GET("accounts/{accountId}/workers/subdomain")
     suspend fun getAccountSubdomain(
         @Path("accountId") accountId: String
@@ -163,11 +170,20 @@ interface WorkerApi {
     @GET("accounts/{accountId}/email/routing/addresses")
     suspend fun listEmailDestinations(@Path("accountId") accountId: String): Response<CfListResponse<JsonObject>>
 
+    @POST("accounts/{accountId}/email/routing/addresses")
+    suspend fun createEmailDestination(@Path("accountId") accountId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    @DELETE("accounts/{accountId}/email/routing/addresses/{emailId}")
+    suspend fun deleteEmailDestination(@Path("accountId") accountId: String, @Path("emailId") emailId: String): Response<CfStandardResponse>
+
     @GET("zones/{zoneId}/email/routing/rules")
     suspend fun listEmailRules(@Path("zoneId") zoneId: String): Response<CfListResponse<JsonObject>>
 
     @GET("zones/{zoneId}/email/routing/rules/catch_all")
     suspend fun getEmailCatchAll(@Path("zoneId") zoneId: String): Response<CfStandardResponse>
+
+    @PUT("zones/{zoneId}/email/routing/rules/catch_all")
+    suspend fun updateEmailCatchAll(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
 
     @POST("zones/{zoneId}/email/routing/rules")
     suspend fun createEmailRule(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
@@ -194,7 +210,6 @@ interface WorkerApi {
     @PUT("accounts/{accountId}/cfd_tunnel/{tunnelId}/configurations")
     suspend fun updateTunnelConfigurations(@Path("accountId") accountId: String, @Path("tunnelId") tunnelId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
 
-    
     // --- CLOUDFLARE PAGES ---
     @GET("accounts/{accountId}/pages/projects")
     suspend fun listPagesProjects(@Path("accountId") accountId: String): Response<CfListResponse<JsonObject>>

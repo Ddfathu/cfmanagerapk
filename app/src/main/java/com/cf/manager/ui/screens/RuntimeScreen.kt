@@ -61,19 +61,21 @@ fun RuntimeScreen() {
                 val accId = CfAccountHelper.ensureAccountId()
                 val res = ApiClient.api.getWorkerSettings(accId, workerName)
                 if (res.isSuccessful && res.body()?.success == true) {
-                    val result = res.body()?.result
+                    val resultElement = res.body()?.result
+                    val resultObj = if (resultElement?.isJsonObject == true) resultElement.asJsonObject else null
+
                     // Baca compatibility date & flags
-                    val cDate = result?.get("compatibility_date")?.asString
+                    val cDate = resultObj?.get("compatibility_date")?.asString
                     if (!cDate.isNullOrBlank()) compatDate = cDate
 
-                    val flagsArr = result?.getAsJsonArray("compatibility_flags")
+                    val flagsArr = resultObj?.getAsJsonArray("compatibility_flags")
                     if (flagsArr != null) {
                         val flags = flagsArr.map { it.asString }
                         compatFlags = flags.joinToString(", ")
                     }
 
                     // Baca placement
-                    val placeObj = result?.getAsJsonObject("placement")
+                    val placeObj = resultObj?.getAsJsonObject("placement")
                     val mode = placeObj?.get("mode")?.asString ?: "off"
                     placementMode = mode
                 }
