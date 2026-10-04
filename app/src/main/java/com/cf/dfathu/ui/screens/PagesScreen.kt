@@ -2,6 +2,7 @@ package com.cf.dfathu.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -35,13 +36,18 @@ import com.cf.dfathu.data.local.AccountStorage
 import com.cf.dfathu.data.local.PagesDeploySnapshot
 import com.cf.dfathu.data.local.PagesHistoryStorage
 import com.google.gson.Gson
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URL
+import java.security.MessageDigest
 
 data class PagesCustomDomainItem(
     val id: String = "",
@@ -49,6 +55,13 @@ data class PagesCustomDomainItem(
     val status: String = "active",
     val sslStatus: String? = null
 )
+
+// Helper Hashing MD5 buat mencocokkan hash dengan backend Cloudflare Pages
+fun getMd5Hash(input: ByteArray): String {
+    val md = MessageDigest.getInstance("MD5")
+    val digest = md.digest(input)
+    return digest.joinToString("") { "%02x".format(it) }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,7 +82,7 @@ fun PagesScreen() {
     var isLoadingProjects by remember { mutableStateOf(false) }
     var statusMsg by remember { mutableStateOf("") }
 
-    // --- TAB 1: FORM BUAT PROJECT BARU (DOH 1.1.1.1 PERSIS SC WEB) ---
+    // --- TAB 1: FORM BUAT PROJECT BARU ---
     var newCreateProjectName by remember { mutableStateOf("") }
     var newCreateCompatDate by remember { mutableStateOf("2024-01-01") }
     var newCreateEnableNodeCompat by remember { mutableStateOf(true) }
@@ -78,8 +91,9 @@ fun PagesScreen() {
     var isSubdomainAvailable by remember { mutableStateOf<Boolean?>(null) }
     var isCreatingNewProject by remember { mutableStateOf(false) }
 
-    // --- TAB 2: DEPLOY STUDIO (PERSIS SC WEB) ---
+    // --- TAB 2: DEPLOY STUDIO ---
     var targetProjectName by remember { mutableStateOf("") }
+    var isProjectDropdownExpanded by remember { mutableStateOf(false) } // State Dropdown Target Project
     var deployCompatDate by remember { mutableStateOf("2024-01-01") }
     var deployEnableNodeCompat by remember { mutableStateOf(true) }
     var selectedFolderInfo by remember { mutableStateOf("") }
@@ -240,6 +254,203 @@ fun PagesScreen() {
         }
     }
 
+    // --- LOGIKA DIRECT UPLOADER SAMA PERSIS SEPERTI BACKEND SCRIPT 2 ---
+    fun executeDirectUploadDeploy(projectName: String) {
+        if (email.isBlank() || apiKey.isBlank()) {
+            statusMsg = "⚠️ Email & API Key belum dikonfigurasi!"
+            return
+        }
+
+        scope.launch {
+            isDeploying = true
+            statusMsg = "⏳ Inisialisasi pipeline upload ke '$projectName'..."
+            try {
+                val accId = CfAccountHelper.ensureAccountId()
+                if (accId.isBlank()) {
+                    statusMsg = "❌ Gagal deteksi Account ID!"
+                    return@launch
+                }
+
+                // 1. Inisialisasi Project (Buat / Buka)
+                val flagsList = if (deployEnableNodeCompat) listOf("nodejs_compat") else emptyList()
+                val createPayload = mapOf(
+                    "name" to projectName,
+                    "production_branch" to "main",
+                    "deployment_configs" to mapOf(
+                        "production" to mapOf(
+                            "compatibility_date" to deployCompatDate,
+                            "compatibility_flags" to flagsList
+                        ),
+                        "preview" to mapOf(
+                            "compatibility_date" to deployCompatDate,
+                            "compatibility_flags" to flagsList
+                        )
+                    )
+                )
+                
+                val createRes = ApiClient.api.createPagesProject(accId, createPayload)
+                if (!createRes.isSuccessful && createRes.code() != 409) {
+                    val err = createRes.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + createRes.code())
+                    statusMsg = "❌ Error inisialisasi project: $err"
+                    return@launch
+                }
+
+                val client = OkHttpClient()
+
+                // 2. Minta JWT Upload Token dari Cloudflare
+                statusMsg = "🔑 Mengambil JWT Upload Token..."
+                val tokenReq = Request.Builder()
+                    .url("https://api.cloudflare.com/client/v4/accounts/$accId/pages/projects/$projectName/upload-token")
+                    .header("X-Auth-Email", email)
+                    .header("X-Auth-Key", apiKey)
+                    .get()
+                    .build()
+
+                val tokenResp = withContext(Dispatchers.IO) { client.newCall(tokenReq).execute() }
+                val tokenRespStr = tokenResp.body?.string() ?: ""
+                val tokenJson = gson.fromJson(tokenRespStr, JsonObject::class.java)
+
+                if (!tokenResp.isSuccessful || tokenJson.get("success")?.asBoolean != true) {
+                    val err = tokenJson.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: "Gagal ambil token"
+                    statusMsg = "❌ Token Error: $err"
+                    return@launch
+                }
+
+                val jwtToken = tokenJson.getAsJsonObject("result")?.get("jwt")?.asString ?: ""
+                if (jwtToken.isBlank()) {
+                    statusMsg = "❌ JWT Token kosong!"
+                    return@launch
+                }
+
+                // 3. Olah file HTML ke Manifest & Hashes
+                statusMsg = "📦 Memproses hash MD5 aset web..."
+                val manifest = JsonObject()
+                val hashesList = JsonArray()
+                val filesMap = HashMap<String, String>()
+                val contentTypesMap = HashMap<String, String>()
+
+                if (htmlContent.isNotBlank()) {
+                    val htmlBytes = htmlContent.toByteArray(Charsets.UTF_8)
+                    val md5Hash = getMd5Hash(htmlBytes)
+                    val base64Content = Base64.encodeToString(htmlBytes, Base64.NO_WRAP)
+
+                    manifest.addProperty("/index.html", md5Hash)
+                    hashesList.add(md5Hash)
+                    filesMap[md5Hash] = base64Content
+                    contentTypesMap[md5Hash] = "text/html; charset=utf-8"
+                }
+
+                // 4. Check Missing Hashes
+                if (hashesList.size() > 0) {
+                    statusMsg = "🔍 Memeriksa missing hashes..."
+                    val checkMissingBody = JsonObject().apply { add("hashes", hashesList) }
+                    
+                    val checkReq = Request.Builder()
+                        .url("https://api.cloudflare.com/client/v4/pages/assets/check-missing")
+                        .header("Authorization", "Bearer $jwtToken")
+                        .header("Content-Type", "application/json")
+                        .post(checkMissingBody.toString().toRequestBody("application/json".toMediaType()))
+                        .build()
+
+                    val checkResp = withContext(Dispatchers.IO) { client.newCall(checkReq).execute() }
+                    val checkRespStr = checkResp.body?.string() ?: ""
+                    val checkJson = gson.fromJson(checkRespStr, JsonObject::class.java)
+                    
+                    val missingHashes = checkJson.getAsJsonArray("result") ?: JsonArray()
+
+                    // 5. Upload File Aset yang Belum Ada
+                    if (missingHashes.size() > 0) {
+                        statusMsg = "📤 Mengunggah ${missingHashes.size()} aset baru..."
+                        val uploadPayloadArr = JsonArray()
+                        
+                        missingHashes.forEach { element ->
+                            val hashKey = element.asString
+                            val item = JsonObject().apply {
+                                addProperty("key", hashKey)
+                                addProperty("value", filesMap[hashKey] ?: "")
+                                add("metadata", JsonObject().apply {
+                                    addProperty("contentType", contentTypesMap[hashKey] ?: "application/octet-stream")
+                                })
+                                addProperty("base64", true)
+                            }
+                            uploadPayloadArr.add(item)
+                        }
+
+                        val uploadReq = Request.Builder()
+                            .url("https://api.cloudflare.com/client/v4/pages/assets/upload")
+                            .header("Authorization", "Bearer $jwtToken")
+                            .header("Content-Type", "application/json")
+                            .post(uploadPayloadArr.toString().toRequestBody("application/json".toMediaType()))
+                            .build()
+
+                        val upResp = withContext(Dispatchers.IO) { client.newCall(uploadReq).execute() }
+                        if (!upResp.isSuccessful) {
+                            statusMsg = "❌ Gagal upload file aset: HTTP ${upResp.code}"
+                            return@launch
+                        }
+
+                        val upsertBody = JsonObject().apply { add("hashes", missingHashes) }
+                        val upsertReq = Request.Builder()
+                            .url("https://api.cloudflare.com/client/v4/pages/assets/upsert-hashes")
+                            .header("Authorization", "Bearer $jwtToken")
+                            .header("Content-Type", "application/json")
+                            .post(upsertBody.toString().toRequestBody("application/json".toMediaType()))
+                            .build()
+
+                        withContext(Dispatchers.IO) { client.newCall(upsertReq).execute() }
+                    }
+                }
+
+                // 6. Buat Final Deploy Request
+                statusMsg = "🚀 Mempublikasikan Pages..."
+                val multipartBuilder = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("manifest", manifest.toString())
+
+                if (workerScript.isNotBlank()) {
+                    val workerRequestBody = workerScript.toByteArray(Charsets.UTF_8)
+                        .toRequestBody("application/javascript".toMediaType())
+                    multipartBuilder.addFormDataPart("_worker.js", "_worker.js", workerRequestBody)
+                }
+
+                val finalDeployReq = Request.Builder()
+                    .url("https://api.cloudflare.com/client/v4/accounts/$accId/pages/projects/$projectName/deployments")
+                    .header("X-Auth-Email", email)
+                    .header("X-Auth-Key", apiKey)
+                    .post(multipartBuilder.build())
+                    .build()
+
+                val finalResp = withContext(Dispatchers.IO) { client.newCall(finalDeployReq).execute() }
+                val finalRespStr = finalResp.body?.string() ?: ""
+                val finalJson = gson.fromJson(finalRespStr, JsonObject::class.java)
+
+                if (finalJson.get("success")?.asBoolean == true) {
+                    historyStorage.saveSnapshot(
+                        PagesDeploySnapshot(
+                            projectName = projectName,
+                            htmlContent = htmlContent,
+                            workerScript = workerScript,
+                            compatDate = deployCompatDate,
+                            enableNodeCompat = deployEnableNodeCompat
+                        )
+                    )
+                    statusMsg = "🎉 Pages '$projectName' berhasil dideploy!"
+                    selectedPagesTab = 0
+                    loadProjects()
+                } else {
+                    val errArr = finalJson.getAsJsonArray("errors")
+                    val errDetail = errArr?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + finalResp.code)
+                    statusMsg = "❌ Deploy gagal: $errDetail"
+                }
+
+            } catch (e: Exception) {
+                statusMsg = "❌ Error Exception: ${e.message}"
+            } finally {
+                isDeploying = false
+            }
+        }
+    }
+
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { treeUri: Uri? ->
@@ -330,7 +541,7 @@ fun PagesScreen() {
 
     fun loadProjects() {
         if (email.isBlank() || apiKey.isBlank()) {
-            statusMsg = "⚠️ Isi Email & API Key di tab Akun terlebih dahulu!"
+            statusMsg = "⚠ Isi Email & API Key di tab Akun terlebih dahulu!"
             return
         }
         scope.launch {
@@ -513,7 +724,7 @@ fun PagesScreen() {
             }
         }
 
-        // ==================== SUB-TAB 1: KHUSUS BUAT PROJECT BARU (DOH 1.1.1.1 PERSIS SC WEB) ====================
+        // ==================== SUB-TAB 1: KHUSUS BUAT PROJECT BARU ====================
         if (selectedPagesTab == 1) {
             item {
                 Card(
@@ -706,19 +917,54 @@ fun PagesScreen() {
 
                         Spacer(modifier = Modifier.height(10.dp))
 
+                        // --- INPUT PROJECT TARGET DENGAN DROPDOWN ---
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            OutlinedTextField(
-                                value = targetProjectName,
-                                onValueChange = { targetProjectName = it.lowercase().trim() },
-                                label = { Text("Project Target (.pages.dev)") },
-                                placeholder = { Text("nama-project") },
-                                singleLine = true,
+                            ExposedDropdownMenuBox(
+                                expanded = isProjectDropdownExpanded,
+                                onExpandedChange = { isProjectDropdownExpanded = !isProjectDropdownExpanded },
                                 modifier = Modifier.weight(1f)
-                            )
+                            ) {
+                                OutlinedTextField(
+                                    value = targetProjectName,
+                                    onValueChange = { 
+                                        targetProjectName = it.lowercase().trim()
+                                        isProjectDropdownExpanded = true
+                                    },
+                                    label = { Text("Project Target (.pages.dev)") },
+                                    placeholder = { Text("nama-project") },
+                                    singleLine = true,
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isProjectDropdownExpanded) },
+                                    colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                                    modifier = Modifier.menuAnchor()
+                                )
+
+                                val filteredProjects = projects.filter { 
+                                    it.contains(targetProjectName, ignoreCase = true) 
+                                }
+
+                                if (filteredProjects.isNotEmpty()) {
+                                    ExposedDropdownMenu(
+                                        expanded = isProjectDropdownExpanded,
+                                        onDismissRequest = { isProjectDropdownExpanded = false }
+                                    ) {
+                                        filteredProjects.forEach { pName ->
+                                            DropdownMenuItem(
+                                                text = { Text(pName, fontWeight = FontWeight.SemiBold) },
+                                                onClick = {
+                                                    targetProjectName = pName
+                                                    isProjectDropdownExpanded = false
+                                                    pullLatestDeployment(pName)
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
                             Button(
                                 onClick = { pullLatestDeployment(targetProjectName) },
                                 enabled = !isPullingLatest && targetProjectName.isNotBlank(),
@@ -861,48 +1107,7 @@ fun PagesScreen() {
                                     statusMsg = "Nama project tidak boleh kosong!"
                                     return@Button
                                 }
-                                scope.launch {
-                                    isDeploying = true
-                                    statusMsg = "Mendeploy aset Pages ke '$target'..."
-                                    try {
-                                        val accId = CfAccountHelper.ensureAccountId()
-                                        val flagsList = if (deployEnableNodeCompat) listOf("nodejs_compat") else emptyList()
-
-                                        val payload = mapOf(
-                                            "name" to target,
-                                            "production_branch" to "main",
-                                            "deployment_configs" to mapOf(
-                                                "production" to mapOf(
-                                                    "compatibility_date" to deployCompatDate,
-                                                    "compatibility_flags" to flagsList
-                                                )
-                                            )
-                                        )
-
-                                        val res = ApiClient.api.createPagesProject(accId, payload)
-                                        if (res.isSuccessful && res.body()?.success == true) {
-                                            historyStorage.saveSnapshot(
-                                                PagesDeploySnapshot(
-                                                    projectName = target,
-                                                    htmlContent = htmlContent,
-                                                    workerScript = workerScript,
-                                                    compatDate = deployCompatDate,
-                                                    enableNodeCompat = deployEnableNodeCompat
-                                                )
-                                            )
-                                            statusMsg = "🎉 Pages '$target' berhasil dideploy!"
-                                            selectedPagesTab = 0
-                                            loadProjects()
-                                        } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
-                                            statusMsg = "Gagal deploy: $err"
-                                        }
-                                    } catch (e: Exception) {
-                                        statusMsg = "Error: ${e.message}"
-                                    } finally {
-                                        isDeploying = false
-                                    }
-                                }
+                                executeDirectUploadDeploy(target)
                             },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
@@ -1308,10 +1513,10 @@ fun PagesScreen() {
                                 loadProjects()
                             } else {
                                 val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
-                                statusMsg = "Gagal menghapus: " + err
+                                statusMsg = "Gagal menghapus: $err"
                             }
                         } catch (e: Exception) {
-                            statusMsg = "Error: " + e.message
+                            statusMsg = "Error: ${e.message}"
                         }
                     }
                 }) {

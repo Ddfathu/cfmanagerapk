@@ -22,7 +22,6 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.documentfile.provider.DocumentFile
 import com.cf.dfathu.data.AppConfig
 import com.cf.dfathu.data.BindingType
 import com.cf.dfathu.data.DetectedBinding
@@ -35,8 +34,11 @@ import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URL
 
@@ -52,8 +54,8 @@ data class WorkerDomainItem(
 fun WorkerEditorScreen() {
     val context = LocalContext.current
     val storage = remember { AccountStorage(context) }
-    val accounts = storage.getAccounts()
-    val activeIdx = storage.getActiveIndex()
+    val accounts = remember { storage.getAccounts() }
+    val activeIdx = remember { storage.getActiveIndex() }
     val currAcc = accounts.getOrNull(activeIdx)
     val email = AppConfig.activeEmail.ifBlank { currAcc?.email ?: "" }
     val apiKey = AppConfig.activeApiKey.ifBlank { currAcc?.apiKey ?: "" }
@@ -111,7 +113,10 @@ fun WorkerEditorScreen() {
 
     fun openUrl(urlStr: String) {
         try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlStr))
+            val validUrl = if (!urlStr.startsWith("http://") && !urlStr.startsWith("https://")) "https://$urlStr" else urlStr
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(validUrl)).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
             context.startActivity(intent)
         } catch (_: Exception) {}
     }
@@ -134,6 +139,70 @@ fun WorkerEditorScreen() {
                 }
             } catch (e: Exception) {
                 statusMsg = "Gagal baca file: " + e.message
+            }
+        }
+    }
+
+    // --- FUN HELPER PUSH DEPLOYMENT & ENABLE SUBDOMAIN (FIX 404 NOT FOUND) ---
+    fun deployWorkerScript(
+        accId: String,
+        workerName: String,
+        codeStr: String,
+        compatDate: String,
+        enableNodeCompat: Boolean,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        scope.launch {
+            try {
+                val client = OkHttpClient()
+
+                // 1. Susun Metadata JSON
+                val metadataObj = JsonObject().apply {
+                    addProperty("main_module", "index.js")
+                    addProperty("compatibility_date", compatDate)
+                    val flagsArr = com.google.gson.JsonArray()
+                    if (enableNodeCompat) flagsArr.add("nodejs_compat")
+                    add("compatibility_flags", flagsArr)
+                }
+
+                // 2. Kirim Multipart Upload ke Cloudflare Worker API
+                val multipartBuilder = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("metadata", "metadata.json", metadataObj.toString().toRequestBody("application/json".toMediaType()))
+                    .addFormDataPart("index.js", "index.js", codeStr.toByteArray(Charsets.UTF_8).toRequestBody("application/javascript+module".toMediaType()))
+
+                val deployReq = Request.Builder()
+                    .url("https://api.cloudflare.com/client/v4/accounts/$accId/workers/scripts/$workerName")
+                    .header("X-Auth-Email", email)
+                    .header("X-Auth-Key", apiKey)
+                    .put(multipartBuilder.build())
+                    .build()
+
+                val deployResp = withContext(Dispatchers.IO) { client.newCall(deployReq).execute() }
+                val deployRespStr = deployResp.body?.string() ?: ""
+                val deployJson = gson.fromJson(deployRespStr, JsonObject::class.java)
+
+                if (deployJson.get("success")?.asBoolean == true) {
+                    // 3. Wajib Enable Subdomain workers.dev agar TIDAK 404
+                    val enableSubdomainBody = JsonObject().apply { addProperty("enabled", true) }
+                    val enableReq = Request.Builder()
+                        .url("https://api.cloudflare.com/client/v4/accounts/$accId/workers/scripts/$workerName/subdomain")
+                        .header("X-Auth-Email", email)
+                        .header("X-Auth-Key", apiKey)
+                        .post(enableSubdomainBody.toString().toRequestBody("application/json".toMediaType()))
+                        .build()
+
+                    withContext(Dispatchers.IO) { client.newCall(enableReq).execute() }
+
+                    onSuccess()
+                } else {
+                    val errDetail = deployJson.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + deployResp.code)
+                    onError("Gagal Deploy: $errDetail")
+                }
+
+            } catch (e: Exception) {
+                onError("Exception: " + e.message)
             }
         }
     }
@@ -412,6 +481,7 @@ fun WorkerEditorScreen() {
         }
     }
 
+    // DIALOG EDIT WORKER
     if (showEditDialog && activeWorkerToEdit.isNotBlank()) {
         Dialog(
             onDismissRequest = { if (!isSavingEdit) showEditDialog = false },
@@ -554,35 +624,26 @@ fun WorkerEditorScreen() {
 
                         Button(
                             onClick = {
+                                isSavingEdit = true
                                 scope.launch {
-                                    isSavingEdit = true
-                                    try {
-                                        val accId = CfAccountHelper.ensureAccountId()
-                                        val metadataObj = JsonObject()
-                                        metadataObj.addProperty("main_module", "index.js")
-                                        metadataObj.addProperty("compatibility_date", editCompatDate)
-                                        val flagsArr = mutableListOf<String>()
-                                        if (editEnableNodeCompat) flagsArr.add("nodejs_compat")
-                                        metadataObj.add("compatibility_flags", gson.toJsonTree(flagsArr))
-
-                                        val metaBody = metadataObj.toString().toRequestBody("application/json".toMediaTypeOrNull())
-                                        val scriptBody = editingScriptCode.toRequestBody("application/javascript+module".toMediaTypeOrNull())
-                                        val scriptPart = MultipartBody.Part.createFormData("index.js", "index.js", scriptBody)
-
-                                        val res = ApiClient.api.deployWorkerMultipart(accId, activeWorkerToEdit, metaBody, scriptPart)
-                                        if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "✅ Worker '" + activeWorkerToEdit + "' berhasil di-deploy!"
+                                    val accId = CfAccountHelper.ensureAccountId()
+                                    deployWorkerScript(
+                                        accId = accId,
+                                        workerName = activeWorkerToEdit,
+                                        codeStr = editingScriptCode,
+                                        compatDate = editCompatDate,
+                                        enableNodeCompat = editEnableNodeCompat,
+                                        onSuccess = {
+                                            isSavingEdit = false
+                                            statusMsg = "✅ Worker '$activeWorkerToEdit' berhasil di-update & live!"
                                             showEditDialog = false
                                             loadWorkers()
-                                        } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
-                                            statusMsg = "Gagal deploy: " + err
+                                        },
+                                        onError = { err ->
+                                            isSavingEdit = false
+                                            statusMsg = "❌ $err"
                                         }
-                                    } catch (e: Exception) {
-                                        statusMsg = "Error: " + e.message
-                                    } finally {
-                                        isSavingEdit = false
-                                    }
+                                    )
                                 }
                             },
                             enabled = !isSavingEdit && !isLoadingCode && editingScriptCode.isNotBlank(),
@@ -596,6 +657,7 @@ fun WorkerEditorScreen() {
         }
     }
 
+    // DIALOG BUAT WORKER BARU
     if (showCreateDialog) {
         Dialog(
             onDismissRequest = { if (!isDeployingNew) showCreateDialog = false },
@@ -744,35 +806,26 @@ fun WorkerEditorScreen() {
                                     statusMsg = "Nama Worker tidak boleh kosong!"
                                     return@Button
                                 }
+                                isDeployingNew = true
                                 scope.launch {
-                                    isDeployingNew = true
-                                    try {
-                                        val accId = CfAccountHelper.ensureAccountId()
-                                        val metadataObj = JsonObject()
-                                        metadataObj.addProperty("main_module", "index.js")
-                                        metadataObj.addProperty("compatibility_date", newCompatDate)
-                                        val flagsArr = mutableListOf<String>()
-                                        if (newEnableNodeCompat) flagsArr.add("nodejs_compat")
-                                        metadataObj.add("compatibility_flags", gson.toJsonTree(flagsArr))
-
-                                        val metaBody = metadataObj.toString().toRequestBody("application/json".toMediaTypeOrNull())
-                                        val scriptBody = newWorkerCode.toRequestBody("application/javascript+module".toMediaTypeOrNull())
-                                        val scriptPart = MultipartBody.Part.createFormData("index.js", "index.js", scriptBody)
-
-                                        val res = ApiClient.api.deployWorkerMultipart(accId, target, metaBody, scriptPart)
-                                        if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "🎉 Worker '" + target + "' berhasil dibuat!"
+                                    val accId = CfAccountHelper.ensureAccountId()
+                                    deployWorkerScript(
+                                        accId = accId,
+                                        workerName = target,
+                                        codeStr = newWorkerCode,
+                                        compatDate = newCompatDate,
+                                        enableNodeCompat = newEnableNodeCompat,
+                                        onSuccess = {
+                                            isDeployingNew = false
+                                            statusMsg = "🎉 Worker '$target' berhasil dibuat & aktif!"
                                             showCreateDialog = false
                                             loadWorkers()
-                                        } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
-                                            statusMsg = "Gagal deploy: " + err
+                                        },
+                                        onError = { err ->
+                                            isDeployingNew = false
+                                            statusMsg = "❌ $err"
                                         }
-                                    } catch (e: Exception) {
-                                        statusMsg = "Error: " + e.message
-                                    } finally {
-                                        isDeployingNew = false
-                                    }
+                                    )
                                 }
                             },
                             enabled = !isDeployingNew && newWorkerName.isNotBlank() && newWorkerCode.isNotBlank(),
@@ -1006,7 +1059,7 @@ fun WorkerEditorScreen() {
                                 loadWorkers()
                             } else {
                                 val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
-                                statusMsg = "Gagal menghapus: " + err
+                                statusMsg = "Gagal menghapus: $err"
                             }
                         } catch (e: Exception) {
                             statusMsg = "Error: " + e.message
