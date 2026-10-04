@@ -47,11 +47,22 @@ fun VariablesScreen() {
     var workerExpanded by remember { mutableStateOf(false) }
 
     var varList by remember { mutableStateOf<List<WorkerVarItem>>(emptyList()) }
-    var varType by remember { mutableStateOf("plain_text") } // "plain_text" / "secret_text"
+    
+    // State Form Tambah Utama (Atas)
+    var varType by remember { mutableStateOf("plain_text") }
     var varNameInput by remember { mutableStateOf("") }
     var varValueInput by remember { mutableStateOf("") }
 
-    var editingVar by remember { mutableStateOf<WorkerVarItem?>(null) }
+    // State Pop-up Dialog Edit (BARU)
+    var showEditDialog by remember { mutableStateOf(false) }
+    var editVarTarget by remember { mutableStateOf<WorkerVarItem?>(null) }
+    var editVarType by remember { mutableStateOf("plain_text") }
+    var editVarValueInput by remember { mutableStateOf("") }
+
+    // State Dialog Hapus
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var varToDelete by remember { mutableStateOf<WorkerVarItem?>(null) }
+
     var statusMsg by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
@@ -90,7 +101,7 @@ fun VariablesScreen() {
 
     fun loadWorkers() {
         if (email.isBlank() || apiKey.isBlank()) {
-            statusMsg = "⚠️️ Isi Email & API Key di tab Akun terlebih dahulu!"
+            statusMsg = "⚠️ Isi Email & API Key di tab Akun terlebih dahulu!"
             return
         }
         scope.launch {
@@ -164,7 +175,6 @@ fun VariablesScreen() {
                                 onClick = {
                                     selectedWorker = w
                                     workerExpanded = false
-                                    editingVar = null
                                     varNameInput = ""
                                     varValueInput = ""
                                     loadWorkerVars(w)
@@ -176,6 +186,7 @@ fun VariablesScreen() {
             }
         }
 
+        // --- FORM TAMBAH VARIABLE / SECRET ---
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -184,7 +195,7 @@ fun VariablesScreen() {
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text(
-                        text = if (editingVar != null) "✏️️ Edit Variable: env." + editingVar!!.name else "➕ Tambah Secret / Variable",
+                        text = "➕ Tambah Secret / Variable",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -212,8 +223,7 @@ fun VariablesScreen() {
                         label = { Text("Nama Variable (env.NAMA_INI)") },
                         placeholder = { Text("Contoh: API_KEY, UUID, PROXY_IP") },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = (editingVar == null)
+                        modifier = Modifier.fillMaxWidth()
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -228,102 +238,85 @@ fun VariablesScreen() {
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
-                                val w = selectedWorker
-                                val name = varNameInput.trim()
-                                val value = varValueInput
+                    Button(
+                        onClick = {
+                            val w = selectedWorker
+                            val name = varNameInput.trim()
+                            val value = varValueInput
 
-                                if (w.isBlank() || name.isBlank() || value.isBlank()) {
-                                    statusMsg = "Pilih worker dan isi nama serta nilainya!"
-                                    return@Button
-                                }
-
-                                scope.launch {
-                                    isSaving = true
-                                    statusMsg = "Menyimpan variable ke Cloudflare..."
-                                    try {
-                                        val accId = CfAccountHelper.ensureAccountId()
-
-                                        if (varType == "secret_text") {
-                                            val payload = mapOf(
-                                                "name" to name,
-                                                "text" to value,
-                                                "type" to "secret_text"
-                                            )
-                                            val res = ApiClient.api.putWorkerSecretStringMap(accId, w, payload)
-                                            if (res.isSuccessful && res.body()?.success == true) {
-                                                statusMsg = "✅ Secret env." + name + " berhasil disimpan di " + w + "!"
-                                                editingVar = null
-                                                varNameInput = ""
-                                                varValueInput = ""
-                                                loadWorkerVars(w)
-                                            } else {
-                                                val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
-                                                statusMsg = "Gagal: " + err
-                                            }
-                                        } else {
-                                            val getRes = ApiClient.api.getWorkerBindings(accId, w)
-                                            val existingBindings = if (getRes.isSuccessful && getRes.body()?.success == true) {
-                                                getRes.body()?.result?.toMutableList() ?: mutableListOf()
-                                            } else mutableListOf()
-
-                                            val filteredList = existingBindings.filter {
-                                                val bName = it.get("name")?.asString
-                                                val bType = it.get("type")?.asString
-                                                !(bName == name && bType == "plain_text")
-                                            }.toMutableList()
-
-                                            val newBinding = JsonObject().apply {
-                                                addProperty("type", "plain_text")
-                                                addProperty("name", name)
-                                                addProperty("text", value)
-                                            }
-                                            filteredList.add(newBinding)
-
-                                            val settingsMap = mapOf("bindings" to filteredList)
-                                            val jsonStr = gson.toJson(settingsMap)
-                                            val reqBody = jsonStr.toRequestBody("application/json".toMediaTypeOrNull())
-                                            val part = MultipartBody.Part.createFormData("settings", "settings.json", reqBody)
-
-                                            val patchRes = ApiClient.api.patchWorkerSettingsMultipart(accId, w, part)
-                                            if (patchRes.isSuccessful && patchRes.body()?.success == true) {
-                                                statusMsg = "✅ Variable env." + name + " berhasil disimpan di " + w + "!"
-                                                editingVar = null
-                                                varNameInput = ""
-                                                varValueInput = ""
-                                                loadWorkerVars(w)
-                                            } else {
-                                                val err = patchRes.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + patchRes.code())
-                                                statusMsg = "Gagal: " + err
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        statusMsg = "Error: " + e.message
-                                    } finally {
-                                        isSaving = false
-                                    }
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            enabled = !isSaving && selectedWorker.isNotBlank() && varNameInput.isNotBlank() && varValueInput.isNotBlank()
-                        ) {
-                            Text(if (isSaving) "Menyimpan..." else if (editingVar != null) "💾 Update Variable" else "💾 Simpan Variable")
-                        }
-
-                        if (editingVar != null) {
-                            OutlinedButton(
-                                onClick = {
-                                    editingVar = null
-                                    varNameInput = ""
-                                    varValueInput = ""
-                                    varType = "plain_text"
-                                }
-                            ) {
-                                Text("Batal")
+                            if (w.isBlank() || name.isBlank() || value.isBlank()) {
+                                statusMsg = "Pilih worker dan isi nama serta nilainya!"
+                                return@Button
                             }
-                        }
+
+                            scope.launch {
+                                isSaving = true
+                                statusMsg = "Menyimpan variable ke Cloudflare..."
+                                try {
+                                    val accId = CfAccountHelper.ensureAccountId()
+
+                                    if (varType == "secret_text") {
+                                        val payload = mapOf(
+                                            "name" to name,
+                                            "text" to value,
+                                            "type" to "secret_text"
+                                        )
+                                        val res = ApiClient.api.putWorkerSecretStringMap(accId, w, payload)
+                                        if (res.isSuccessful && res.body()?.success == true) {
+                                            statusMsg = "✅ Secret env." + name + " berhasil disimpan di " + w + "!"
+                                            varNameInput = ""
+                                            varValueInput = ""
+                                            loadWorkerVars(w)
+                                        } else {
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                            statusMsg = "Gagal: " + err
+                                        }
+                                    } else {
+                                        val getRes = ApiClient.api.getWorkerBindings(accId, w)
+                                        val existingBindings = if (getRes.isSuccessful && getRes.body()?.success == true) {
+                                            getRes.body()?.result?.toMutableList() ?: mutableListOf()
+                                        } else mutableListOf()
+
+                                        val filteredList = existingBindings.filter {
+                                            val bName = it.get("name")?.asString
+                                            val bType = it.get("type")?.asString
+                                            !(bName == name && bType == "plain_text")
+                                        }.toMutableList()
+
+                                        val newBinding = JsonObject().apply {
+                                            addProperty("type", "plain_text")
+                                            addProperty("name", name)
+                                            addProperty("text", value)
+                                        }
+                                        filteredList.add(newBinding)
+
+                                        val settingsMap = mapOf("bindings" to filteredList)
+                                        val jsonStr = gson.toJson(settingsMap)
+                                        val reqBody = jsonStr.toRequestBody("application/json".toMediaTypeOrNull())
+                                        val part = MultipartBody.Part.createFormData("settings", "settings.json", reqBody)
+
+                                        val patchRes = ApiClient.api.patchWorkerSettingsMultipart(accId, w, part)
+                                        if (patchRes.isSuccessful && patchRes.body()?.success == true) {
+                                            statusMsg = "✅ Variable env." + name + " berhasil disimpan di " + w + "!"
+                                            varNameInput = ""
+                                            varValueInput = ""
+                                            loadWorkerVars(w)
+                                        } else {
+                                            val err = patchRes.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + patchRes.code())
+                                            statusMsg = "Gagal: " + err
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    statusMsg = "Error: " + e.message
+                                } finally {
+                                    isSaving = false
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isSaving && selectedWorker.isNotBlank() && varNameInput.isNotBlank() && varValueInput.isNotBlank()
+                    ) {
+                        Text(if (isSaving) "Menyimpan..." else "💾 Simpan Variable")
                     }
                 }
             }
@@ -389,12 +382,13 @@ fun VariablesScreen() {
                     }
 
                     Row {
+                        // TOMBOL PENSIL (LANGSUNG BUKA POP-UP DIALOG EDIT)
                         IconButton(
                             onClick = {
-                                editingVar = v
-                                varNameInput = v.name
-                                varValueInput = if (isSecret) "" else v.text
-                                varType = v.type
+                                editVarTarget = v
+                                editVarType = v.type
+                                editVarValueInput = if (isSecret) "" else v.text
+                                showEditDialog = true
                             }
                         ) {
                             Text("✏️")
@@ -402,40 +396,8 @@ fun VariablesScreen() {
 
                         IconButton(
                             onClick = {
-                                scope.launch {
-                                    statusMsg = "Menghapus env." + v.name + "..."
-                                    try {
-                                        val accId = CfAccountHelper.ensureAccountId()
-                                        if (isSecret) {
-                                            val res = ApiClient.api.deleteWorkerSecret(accId, selectedWorker, v.name)
-                                            if (res.isSuccessful && res.body()?.success == true) {
-                                                statusMsg = "🗑 Secret env." + v.name + " berhasil dihapus!"
-                                                loadWorkerVars(selectedWorker)
-                                            } else {
-                                                statusMsg = "Gagal hapus: HTTP " + res.code()
-                                            }
-                                        } else {
-                                            val getRes = ApiClient.api.getWorkerBindings(accId, selectedWorker)
-                                            if (getRes.isSuccessful && getRes.body()?.success == true) {
-                                                val existing = getRes.body()?.result?.toMutableList() ?: mutableListOf()
-                                                val filtered = existing.filter { !(it.get("name")?.asString == v.name && it.get("type")?.asString == "plain_text") }
-
-                                                val settingsMap = mapOf("bindings" to filtered)
-                                                val jsonStr = gson.toJson(settingsMap)
-                                                val reqBody = jsonStr.toRequestBody("application/json".toMediaTypeOrNull())
-                                                val part = MultipartBody.Part.createFormData("settings", "settings.json", reqBody)
-
-                                                val patchRes = ApiClient.api.patchWorkerSettingsMultipart(accId, selectedWorker, part)
-                                                if (patchRes.isSuccessful && patchRes.body()?.success == true) {
-                                                    statusMsg = "🗑 Variable env." + v.name + " berhasil dihapus!"
-                                                    loadWorkerVars(selectedWorker)
-                                                }
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        statusMsg = "Error: " + e.message
-                                    }
-                                }
+                                varToDelete = v
+                                showDeleteDialog = true
                             }
                         ) {
                             Text("🗑")
@@ -455,5 +417,170 @@ fun VariablesScreen() {
                 }
             }
         }
+    }
+
+    // --- POP-UP MODAL EDIT DIALOG (BARU) ---
+    if (showEditDialog && editVarTarget != null) {
+        val target = editVarTarget!!
+        AlertDialog(
+            onDismissRequest = { if (!isSaving) showEditDialog = false },
+            title = {
+                Text("✏️ Edit Variable: env." + target.name, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Tipe: " + if (target.type == "secret_text") "Secret (🔒)" else "Plain Text (📝)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    
+                    OutlinedTextField(
+                        value = editVarValueInput,
+                        onValueChange = { editVarValueInput = it },
+                        label = { Text("Nilai Baru") },
+                        placeholder = { Text(if (target.type == "secret_text") "Masukkan nilai secret baru..." else "Nilai variable...") },
+                        singleLine = false,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val w = selectedWorker
+                        val name = target.name
+                        val value = editVarValueInput
+
+                        if (w.isBlank() || value.isBlank()) return@Button
+
+                        scope.launch {
+                            isSaving = true
+                            statusMsg = "Memperbarui env." + name + "..."
+                            try {
+                                val accId = CfAccountHelper.ensureAccountId()
+
+                                if (target.type == "secret_text") {
+                                    val payload = mapOf(
+                                        "name" to name,
+                                        "text" to value,
+                                        "type" to "secret_text"
+                                    )
+                                    val res = ApiClient.api.putWorkerSecretStringMap(accId, w, payload)
+                                    if (res.isSuccessful && res.body()?.success == true) {
+                                        statusMsg = "✅ Secret env." + name + " berhasil diperbarui!"
+                                        showEditDialog = false
+                                        loadWorkerVars(w)
+                                    } else {
+                                        val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                        statusMsg = "Gagal edit: " + err
+                                    }
+                                } else {
+                                    val getRes = ApiClient.api.getWorkerBindings(accId, w)
+                                    val existingBindings = if (getRes.isSuccessful && getRes.body()?.success == true) {
+                                        getRes.body()?.result?.toMutableList() ?: mutableListOf()
+                                    } else mutableListOf()
+
+                                    val filteredList = existingBindings.filter {
+                                        val bName = it.get("name")?.asString
+                                        val bType = it.get("type")?.asString
+                                        !(bName == name && bType == "plain_text")
+                                    }.toMutableList()
+
+                                    val newBinding = JsonObject().apply {
+                                        addProperty("type", "plain_text")
+                                        addProperty("name", name)
+                                        addProperty("text", value)
+                                    }
+                                    filteredList.add(newBinding)
+
+                                    val settingsMap = mapOf("bindings" to filteredList)
+                                    val jsonStr = gson.toJson(settingsMap)
+                                    val reqBody = jsonStr.toRequestBody("application/json".toMediaTypeOrNull())
+                                    val part = MultipartBody.Part.createFormData("settings", "settings.json", reqBody)
+
+                                    val patchRes = ApiClient.api.patchWorkerSettingsMultipart(accId, w, part)
+                                    if (patchRes.isSuccessful && patchRes.body()?.success == true) {
+                                        statusMsg = "✅ Variable env." + name + " berhasil diperbarui!"
+                                        showEditDialog = false
+                                        loadWorkerVars(w)
+                                    } else {
+                                        val err = patchRes.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + patchRes.code())
+                                        statusMsg = "Gagal edit: " + err
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                statusMsg = "Error: " + e.message
+                            } finally {
+                                isSaving = false
+                            }
+                        }
+                    },
+                    enabled = !isSaving && editVarValueInput.isNotBlank()
+                ) {
+                    Text(if (isSaving) "Memproses..." else "💾 Simpan")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showEditDialog = false },
+                    enabled = !isSaving
+                ) {
+                    Text("Batal")
+                }
+            }
+        )
+    }
+
+    // --- DIALOG KONFIRMASI HAPUS ---
+    if (showDeleteDialog && varToDelete != null) {
+        val target = varToDelete!!
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Hapus Variable?") },
+            text = { Text("Yakin ingin menghapus env." + target.name + " dari worker '" + selectedWorker + "'?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteDialog = false
+                    scope.launch {
+                        statusMsg = "Menghapus env." + target.name + "..."
+                        try {
+                            val accId = CfAccountHelper.ensureAccountId()
+                            if (target.type == "secret_text") {
+                                val res = ApiClient.api.deleteWorkerSecret(accId, selectedWorker, target.name)
+                                if (res.isSuccessful && res.body()?.success == true) {
+                                    statusMsg = "🗑 Secret env." + target.name + " berhasil dihapus!"
+                                    loadWorkerVars(selectedWorker)
+                                } else {
+                                    statusMsg = "Gagal hapus: HTTP " + res.code()
+                                }
+                            } else {
+                                val getRes = ApiClient.api.getWorkerBindings(accId, selectedWorker)
+                                if (getRes.isSuccessful && getRes.body()?.success == true) {
+                                    val existing = getRes.body()?.result?.toMutableList() ?: mutableListOf()
+                                    val filtered = existing.filter { !(it.get("name")?.asString == target.name && it.get("type")?.asString == "plain_text") }
+
+                                    val settingsMap = mapOf("bindings" to filtered)
+                                    val jsonStr = gson.toJson(settingsMap)
+                                    val reqBody = jsonStr.toRequestBody("application/json".toMediaTypeOrNull())
+                                    val part = MultipartBody.Part.createFormData("settings", "settings.json", reqBody)
+
+                                    val patchRes = ApiClient.api.patchWorkerSettingsMultipart(accId, selectedWorker, part)
+                                    if (patchRes.isSuccessful && patchRes.body()?.success == true) {
+                                        statusMsg = "🗑 Variable env." + target.name + " berhasil dihapus!"
+                                        loadWorkerVars(selectedWorker)
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            statusMsg = "Error: " + e.message
+                        }
+                    }
+                }) {
+                    Text("Ya, Hapus!", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("Batal")
+                }
+            }
+        )
     }
 }

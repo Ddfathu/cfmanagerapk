@@ -225,7 +225,7 @@ fun MainScreen() {
                     if (activeAccount != null) {
                         when (activeCategory) {
                             MainCategory.COMPUTE -> {
-                                val computeTabs = listOf("⚡ Workers", "📄 Pages", "⚙️ Runtime")
+                                val computeTabs = listOf("⚡ Workers", "📄 Pages & NodeLoc", "⚙️ Runtime")
                                 TabRow(
                                     selectedTabIndex = computeSubTab,
                                     containerColor = MaterialTheme.colorScheme.surface,
@@ -257,7 +257,7 @@ fun MainScreen() {
                                 }
                             }
                             MainCategory.STORAGE -> {
-                                val storageTabs = listOf("💿 R2 Buckets & Bindings")
+                                val storageTabs = listOf("CD R2 Buckets & Bindings")
                                 TabRow(
                                     selectedTabIndex = storageSubTab,
                                     containerColor = MaterialTheme.colorScheme.surface,
@@ -386,7 +386,7 @@ fun MainScreen() {
                     MainCategory.COMPUTE -> {
                         when (computeSubTab) {
                             0 -> WorkerEditorScreen()
-                            1 -> PagesScreen()
+                            1 -> PagesNodeLocScreen() // 👈 SCREEN BARU PENGGANTI PagesScreen()
                             2 -> RuntimeScreen()
                         }
                     }
@@ -556,7 +556,7 @@ fun MainScreen() {
                                             editApiKey = acc.apiKey
                                             showEditDialog = true
                                         }) {
-                                            Text("✏️️")
+                                            Text("✏")
                                         }
 
                                         IconButton(onClick = {

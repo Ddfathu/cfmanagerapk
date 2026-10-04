@@ -37,18 +37,25 @@ fun DnsScreen() {
     var dnsList by remember { mutableStateOf<List<DnsRecordItem>>(emptyList()) }
     var isLoadingList by remember { mutableStateOf(false) }
 
-    // State Form Input
+    // State Form Tambah Record Paling Atas
     val recordTypes = listOf("A", "AAAA", "CNAME", "TXT", "NS", "MX", "SRV", "CAA")
     var selectedType by remember { mutableStateOf("A") }
     var typeExpanded by remember { mutableStateOf(false) }
-
     var nameInput by remember { mutableStateOf("") }
     var contentInput by remember { mutableStateOf("") }
     var proxied by remember { mutableStateOf(true) }
-    var ttlInput by remember { mutableStateOf(1) } // 1 = Auto
+    var ttlInput by remember { mutableStateOf(1) }
 
-    // State Edit Mode
-    var editingRecordId by remember { mutableStateOf<String?>(null) }
+    // State Pop-up Edit Dialog (BARU)
+    var showEditDialog by remember { mutableStateOf(false) }
+    var editRecordId by remember { mutableStateOf("") }
+    var editSelectedType by remember { mutableStateOf("A") }
+    var editTypeExpanded by remember { mutableStateOf(false) }
+    var editNameInput by remember { mutableStateOf("") }
+    var editContentInput by remember { mutableStateOf("") }
+    var editProxied by remember { mutableStateOf(true) }
+    var editTtlInput by remember { mutableStateOf(1) }
+
     var isSaving by remember { mutableStateOf(false) }
     var statusMsg by remember { mutableStateOf("") }
 
@@ -58,8 +65,7 @@ fun DnsScreen() {
 
     val scope = rememberCoroutineScope()
 
-    fun resetForm() {
-        editingRecordId = null
+    fun resetAddForm() {
         selectedType = "A"
         nameInput = ""
         contentInput = ""
@@ -136,7 +142,7 @@ fun DnsScreen() {
                 Column {
                     Text("🌐 Kelola DNS Record", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     val zoneNameLabel = selectedZone?.name ?: "(Pilih Zone)"
-                    Text("Domain: " + zoneNameLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    Text("Domain: $zoneNameLabel", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 }
                 IconButton(onClick = { selectedZone?.let { loadRecords(it.id) } }, enabled = !isLoadingList && selectedZone != null) {
                     Text(if (isLoadingList) "⏳" else "🔄")
@@ -170,7 +176,7 @@ fun DnsScreen() {
                                 onClick = {
                                     selectedZone = z
                                     zoneExpanded = false
-                                    resetForm()
+                                    resetAddForm()
                                     loadRecords(z.id)
                                 }
                             )
@@ -180,7 +186,7 @@ fun DnsScreen() {
             }
         }
 
-        // --- 2. FORM TAMBAH / EDIT DNS RECORD DIRECT ---
+        // --- 2. FORM TAMBAH DNS RECORD BARU ---
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -189,7 +195,7 @@ fun DnsScreen() {
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text(
-                        text = if (editingRecordId != null) "✏️ Edit Record: $nameInput" else "➕ Tambah DNS Record",
+                        text = "➕ Tambah DNS Record Baru",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -268,63 +274,46 @@ fun DnsScreen() {
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                val zone = selectedZone
-                                if (zone == null || nameInput.isBlank() || contentInput.isBlank()) {
-                                    statusMsg = "⚠️ Domain, Name, dan Content wajib diisi!"
-                                    return@Button
-                                }
-                                scope.launch {
-                                    isSaving = true
-                                    try {
-                                        val isEdit = (editingRecordId != null)
-                                        statusMsg = if (isEdit) "Memperbarui record di Cloudflare..." else "Menambahkan record ke Cloudflare..."
-
-                                        val payload = mapOf(
-                                            "type" to selectedType,
-                                            "name" to nameInput,
-                                            "content" to contentInput,
-                                            "ttl" to ttlInput,
-                                            "proxied" to (if (selectedType == "A" || selectedType == "AAAA" || selectedType == "CNAME") proxied else false)
-                                        )
-
-                                        val res = if (isEdit) {
-                                            ApiClient.api.updateDns(zone.id, editingRecordId!!, payload)
-                                        } else {
-                                            ApiClient.api.createDns(zone.id, payload)
-                                        }
-
-                                        if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "✅ Record DNS berhasil disimpan ke Cloudflare!"
-                                            resetForm()
-                                            loadRecords(zone.id)
-                                        } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                                            statusMsg = "Gagal: $err"
-                                        }
-                                    } catch (e: Exception) {
-                                        statusMsg = "Error: ${e.message}"
-                                    } finally {
-                                        isSaving = false
-                                    }
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            enabled = !isSaving && selectedZone != null && nameInput.isNotBlank() && contentInput.isNotBlank()
-                        ) {
-                            Text(if (isSaving) "Menyimpan..." else if (editingRecordId != null) "💾 Update Record" else "➕ Simpan DNS Record")
-                        }
-
-                        if (editingRecordId != null) {
-                            OutlinedButton(onClick = { resetForm() }) {
-                                Text("Batal")
+                    Button(
+                        onClick = {
+                            val zone = selectedZone
+                            if (zone == null || nameInput.isBlank() || contentInput.isBlank()) {
+                                statusMsg = "⚠️ Domain, Name, dan Content wajib diisi!"
+                                return@Button
                             }
-                        }
+                            scope.launch {
+                                isSaving = true
+                                try {
+                                    statusMsg = "Menambahkan record ke Cloudflare..."
+                                    val payload = mapOf(
+                                        "type" to selectedType,
+                                        "name" to nameInput,
+                                        "content" to contentInput,
+                                        "ttl" to ttlInput,
+                                        "proxied" to (if (selectedType == "A" || selectedType == "AAAA" || selectedType == "CNAME") proxied else false)
+                                    )
+
+                                    val res = ApiClient.api.createDns(zone.id, payload)
+
+                                    if (res.isSuccessful && res.body()?.success == true) {
+                                        statusMsg = "✅ Record DNS berhasil ditambahkan!"
+                                        resetAddForm()
+                                        loadRecords(zone.id)
+                                    } else {
+                                        val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                        statusMsg = "Gagal: $err"
+                                    }
+                                } catch (e: Exception) {
+                                    statusMsg = "Error: ${e.message}"
+                                } finally {
+                                    isSaving = false
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isSaving && selectedZone != null && nameInput.isNotBlank() && contentInput.isNotBlank()
+                    ) {
+                        Text(if (isSaving) "Menyimpan..." else "➕ Simpan DNS Record")
                     }
                 }
             }
@@ -365,12 +354,9 @@ fun DnsScreen() {
         }
 
         items(items = dnsList, key = { it.id }) { r ->
-            val isBeingEdited = (editingRecordId == r.id)
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isBeingEdited) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
-                ),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                 shape = RoundedCornerShape(10.dp)
             ) {
                 Row(
@@ -409,13 +395,15 @@ fun DnsScreen() {
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        // TOMBOL PENSIL (LANGSUNG BUKA POP-UP EDIT)
                         IconButton(onClick = {
-                            editingRecordId = r.id
-                            selectedType = r.type
-                            nameInput = r.name
-                            contentInput = r.content
-                            proxied = r.proxied
-                            ttlInput = r.ttl
+                            editRecordId = r.id
+                            editSelectedType = r.type
+                            editNameInput = r.name
+                            editContentInput = r.content
+                            editProxied = r.proxied
+                            editTtlInput = r.ttl
+                            showEditDialog = true
                         }) {
                             Text("✏️")
                         }
@@ -430,6 +418,128 @@ fun DnsScreen() {
                 }
             }
         }
+    }
+
+    // --- POP-UP MODAL EDIT RECORD (BARU) ---
+    if (showEditDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!isSaving) showEditDialog = false },
+            title = {
+                Text("✏️ Edit DNS Record", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ExposedDropdownMenuBox(
+                            expanded = editTypeExpanded,
+                            onExpandedChange = { editTypeExpanded = !editTypeExpanded },
+                            modifier = Modifier.width(100.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = editSelectedType,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Tipe") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = editTypeExpanded) },
+                                modifier = Modifier.menuAnchor()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = editTypeExpanded,
+                                onDismissRequest = { editTypeExpanded = false }
+                            ) {
+                                recordTypes.forEach { t ->
+                                    DropdownMenuItem(
+                                        text = { Text(t, fontWeight = FontWeight.Bold) },
+                                        onClick = {
+                                            editSelectedType = t
+                                            editTypeExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = editNameInput,
+                            onValueChange = { editNameInput = it.trim() },
+                            label = { Text("Name") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = editContentInput,
+                        onValueChange = { editContentInput = it.trim() },
+                        label = { Text("Content / Target IP") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = editProxied,
+                            onCheckedChange = { editProxied = it }
+                        )
+                        Text(
+                            text = if (editProxied) "☁️ Proxy Aktif" else "⚪ DNS Only",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val zone = selectedZone ?: return@Button
+                        scope.launch {
+                            isSaving = true
+                            try {
+                                statusMsg = "Memperbarui record DNS..."
+                                val payload = mapOf(
+                                    "type" to editSelectedType,
+                                    "name" to editNameInput,
+                                    "content" to editContentInput,
+                                    "ttl" to editTtlInput,
+                                    "proxied" to (if (editSelectedType == "A" || editSelectedType == "AAAA" || editSelectedType == "CNAME") editProxied else false)
+                                )
+
+                                val res = ApiClient.api.updateDns(zone.id, editRecordId, payload)
+                                if (res.isSuccessful && res.body()?.success == true) {
+                                    statusMsg = "✅ Record $editNameInput berhasil diperbarui!"
+                                    showEditDialog = false
+                                    loadRecords(zone.id)
+                                } else {
+                                    val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                    statusMsg = "Gagal edit: $err"
+                                }
+                            } catch (e: Exception) {
+                                statusMsg = "Error: ${e.message}"
+                            } finally {
+                                isSaving = false
+                            }
+                        }
+                    },
+                    enabled = !isSaving && editNameInput.isNotBlank() && editContentInput.isNotBlank()
+                ) {
+                    Text(if (isSaving) "Memproses..." else "💾 Simpan")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showEditDialog = false },
+                    enabled = !isSaving
+                ) {
+                    Text("Batal")
+                }
+            }
+        )
     }
 
     // --- DIALOG KONFIRMASI HAPUS DIRECT ---
@@ -450,7 +560,6 @@ fun DnsScreen() {
                                 val res = ApiClient.api.deleteDns(zone.id, target.id)
                                 if (res.isSuccessful && res.body()?.success == true) {
                                     statusMsg = "🗑 Record berhasil dihapus dari Cloudflare!"
-                                    if (editingRecordId == target.id) resetForm()
                                     loadRecords(zone.id)
                                 } else {
                                     val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
