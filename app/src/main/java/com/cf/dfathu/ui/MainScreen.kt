@@ -40,27 +40,25 @@ fun MainScreen() {
     val storage = remember { AccountStorage(context) }
     val scope = rememberCoroutineScope()
 
+    // BACA HANYA AKUN ASLI DARI STORAGE (TIDAK ADA AKUN DUMMY KOSONG)
     var accounts by remember {
-        val list = storage.getAccounts()
-        if (list.isEmpty()) {
-            mutableStateOf(mutableListOf(CfAccount(alias = "Utama", email = "", apiKey = "")))
-        } else {
-            mutableStateOf(list)
-        }
-    }
-    var activeIdx by remember {
-        val saved = storage.getActiveIndex()
-        mutableStateOf(if (saved in accounts.indices) saved else 0)
+        val list = storage.getAccounts().filter { it.email.isNotBlank() || it.apiKey.isNotBlank() }
+        mutableStateOf(list.toMutableList())
     }
 
-    // 4 Kategori Utama di Bottom Bar (Konsep 1)
+    var activeIdx by remember {
+        val saved = storage.getActiveIndex()
+        mutableStateOf(if (saved in accounts.indices) saved else if (accounts.isNotEmpty()) 0 else -1)
+    }
+
+    // 4 Kategori Utama di Bottom Bar
     var activeCategory by remember { mutableStateOf(MainCategory.COMPUTE) }
 
     // Sub-tab di dalam setiap kategori
-    var computeSubTab by remember { mutableStateOf(0) }   // 0: Worker, 1: Pages, 2: Runtime
-    var networkSubTab by remember { mutableStateOf(0) }   // 0: Domain, 1: DNS, 2: Tunnel, 3: SSL
-    var storageSubTab by remember { mutableStateOf(0) }   // 0: R2 Storage
-    var configSubTab by remember { mutableStateOf(0) }    // 0: Variables, 1: Email Routing
+    var computeSubTab by remember { mutableStateOf(0) }
+    var networkSubTab by remember { mutableStateOf(0) }
+    var storageSubTab by remember { mutableStateOf(0) }
+    var configSubTab by remember { mutableStateOf(0) }
 
     // Modal Bottom Sheet Akun Cepat di Atas
     var showAccountSheet by remember { mutableStateOf(false) }
@@ -80,22 +78,25 @@ fun MainScreen() {
 
     var accountStatusNotice by remember { mutableStateOf("") }
 
-    val activeAccount = accounts.getOrElse(activeIdx) { CfAccount(alias = "Default", email = "", apiKey = "") }
+    val activeAccount = accounts.getOrNull(activeIdx)
 
-    fun refreshActiveSession(acc: CfAccount) {
+    fun refreshActiveSession(acc: CfAccount?) {
+        if (acc == null || acc.email.isBlank() || acc.apiKey.isBlank()) {
+            AppConfig.activeEmail = ""
+            AppConfig.activeApiKey = ""
+            ApiClient.activeAccountId = ""
+            accountStatusNotice = "Belum ada akun aktif"
+            return
+        }
         AppConfig.activeEmail = acc.email
         AppConfig.activeApiKey = acc.apiKey
         ApiClient.activeAccountId = ""
         scope.launch {
-            if (acc.email.isNotBlank() && acc.apiKey.isNotBlank()) {
-                val accId = CfAccountHelper.ensureAccountId()
-                accountStatusNotice = if (accId.isNotBlank()) {
-                    "✅ ID: " + accId.take(12) + "..."
-                } else {
-                    "⚠️ Kredensial tidak valid"
-                }
+            val accId = CfAccountHelper.ensureAccountId()
+            accountStatusNotice = if (accId.isNotBlank()) {
+                "✅ ID: " + accId.take(12) + "..."
             } else {
-                accountStatusNotice = "⚠️ Belum ada API Key"
+                "⚠️ Kredensial tidak valid"
             }
         }
     }
@@ -112,7 +113,7 @@ fun MainScreen() {
                 shadowElevation = 3.dp
             ) {
                 Column(modifier = Modifier.fillMaxWidth().statusBarsPadding()) {
-                    // BARIS 1: LOGO BRAND & AVATAR AKUN MODERN DI KANAN ATAS
+                    // BARIS 1: LOGO & TOMBOL AKUN
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -143,130 +144,148 @@ fun MainScreen() {
                                 }
                             }
                             Text(
-                                text = if (accountStatusNotice.isNotBlank()) accountStatusNotice else "Cloudflare Native API",
+                                text = if (activeAccount != null) accountStatusNotice else "Silakan hubungkan akun CF",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.outline
                             )
                         }
 
-                        // TOMBOL AKUN ELEGAN DI POJOK KANAN ATAS
-                        Surface(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(24.dp))
-                                .clickable { showAccountSheet = true },
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            tonalElevation = 2.dp
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                        // JIKA BELUM ADA AKUN: TAMPILKAN TOMBOL '+ MASUK AKUN'
+                        if (activeAccount == null) {
+                            Button(
+                                onClick = {
+                                    newAlias = "Akun Utama"
+                                    newEmail = ""
+                                    newApiKey = ""
+                                    showAddDialog = true
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                             ) {
-                                val initial = (activeAccount.alias.firstOrNull() ?: activeAccount.email.firstOrNull() ?: 'U').uppercaseChar().toString()
-                                Box(
-                                    modifier = Modifier
-                                        .size(28.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            Brush.linearGradient(
-                                                listOf(Color(0xFFF97316), Color(0xFFEA580C))
-                                            )
-                                        ),
-                                    contentAlignment = Alignment.Center
+                                Text("➕ Masuk Akun")
+                            }
+                        } else {
+                            // JIKA SUDAH ADA AKUN: TAMPILKAN BADGE AVATAR
+                            Surface(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .clickable { showAccountSheet = true },
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                tonalElevation = 2.dp
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = initial,
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold,
-                                        style = MaterialTheme.typography.labelMedium
-                                    )
+                                    val initial = (activeAccount.alias.firstOrNull() ?: activeAccount.email.firstOrNull() ?: 'U').uppercaseChar().toString()
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                Brush.linearGradient(
+                                                    listOf(Color(0xFFF97316), Color(0xFFEA580C))
+                                                )
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = initial,
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    Column {
+                                        Text(
+                                            text = activeAccount.alias,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1
+                                        )
+                                        Text(
+                                            text = if (activeAccount.email.isNotBlank()) activeAccount.email.take(12) + "..." else "Ganti Akun",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.outline,
+                                            maxLines = 1
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("▾", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.outline)
                                 }
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                Column {
-                                    Text(
-                                        text = activeAccount.alias,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1
-                                    )
-                                    Text(
-                                        text = if (activeAccount.email.isNotBlank()) activeAccount.email.take(12) + "..." else "Ganti Akun",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline,
-                                        maxLines = 1
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("▾", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.outline)
                             }
                         }
                     }
 
-                    // BARIS 2: SUB-NAVIGATION SESUAI KATEGORI AKTIF
-                    when (activeCategory) {
-                        MainCategory.COMPUTE -> {
-                            val computeTabs = listOf("⚡ Workers", "📄 Pages", "⚙️ Runtime")
-                            TabRow(
-                                selectedTabIndex = computeSubTab,
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                contentColor = MaterialTheme.colorScheme.primary
-                            ) {
-                                computeTabs.forEachIndexed { i, title ->
-                                    Tab(
-                                        selected = computeSubTab == i,
-                                        onClick = { computeSubTab = i },
-                                        text = { Text(title, fontWeight = if (computeSubTab == i) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.bodySmall) }
-                                    )
+                    // BARIS 2: SUB-NAVIGATION TABS
+                    if (activeAccount != null) {
+                        when (activeCategory) {
+                            MainCategory.COMPUTE -> {
+                                val computeTabs = listOf("⚡ Workers", "📄 Pages", "⚙️ Runtime")
+                                TabRow(
+                                    selectedTabIndex = computeSubTab,
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    contentColor = MaterialTheme.colorScheme.primary
+                                ) {
+                                    computeTabs.forEachIndexed { i, title ->
+                                        Tab(
+                                            selected = computeSubTab == i,
+                                            onClick = { computeSubTab = i },
+                                            text = { Text(title, fontWeight = if (computeSubTab == i) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.bodySmall) }
+                                        )
+                                    }
                                 }
                             }
-                        }
-                        MainCategory.NETWORK -> {
-                            val networkTabs = listOf("🌐 Domain", "🛰 DNS", "🚇 Tunnel", "🔒 SSL/TLS")
-                            TabRow(
-                                selectedTabIndex = networkSubTab,
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                contentColor = MaterialTheme.colorScheme.primary
-                            ) {
-                                networkTabs.forEachIndexed { i, title ->
-                                    Tab(
-                                        selected = networkSubTab == i,
-                                        onClick = { networkSubTab = i },
-                                        text = { Text(title, fontWeight = if (networkSubTab == i) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.bodySmall) }
-                                    )
+                            MainCategory.NETWORK -> {
+                                val networkTabs = listOf("🌐 Domain", "🛰 DNS", "🚇 Tunnel", "🔒 SSL/TLS")
+                                TabRow(
+                                    selectedTabIndex = networkSubTab,
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    contentColor = MaterialTheme.colorScheme.primary
+                                ) {
+                                    networkTabs.forEachIndexed { i, title ->
+                                        Tab(
+                                            selected = networkSubTab == i,
+                                            onClick = { networkSubTab = i },
+                                            text = { Text(title, fontWeight = if (networkSubTab == i) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.bodySmall) }
+                                        )
+                                    }
                                 }
                             }
-                        }
-                        MainCategory.STORAGE -> {
-                            val storageTabs = listOf("💿 R2 Buckets & Bindings")
-                            TabRow(
-                                selectedTabIndex = storageSubTab,
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                contentColor = MaterialTheme.colorScheme.primary
-                            ) {
-                                storageTabs.forEachIndexed { i, title ->
-                                    Tab(
-                                        selected = storageSubTab == i,
-                                        onClick = { storageSubTab = i },
-                                        text = { Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall) }
-                                    )
+                            MainCategory.STORAGE -> {
+                                val storageTabs = listOf("💿 R2 Buckets & Bindings")
+                                TabRow(
+                                    selectedTabIndex = storageSubTab,
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    contentColor = MaterialTheme.colorScheme.primary
+                                ) {
+                                    storageTabs.forEachIndexed { i, title ->
+                                        Tab(
+                                            selected = storageSubTab == i,
+                                            onClick = { storageSubTab = i },
+                                            text = { Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall) }
+                                        )
+                                    }
                                 }
                             }
-                        }
-                        MainCategory.CONFIG -> {
-                            val configTabs = listOf("🔑 Variables & Secrets", "✉️ Email Routing")
-                            TabRow(
-                                selectedTabIndex = configSubTab,
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                contentColor = MaterialTheme.colorScheme.primary
-                            ) {
-                                configTabs.forEachIndexed { i, title ->
-                                    Tab(
-                                        selected = configSubTab == i,
-                                        onClick = { configSubTab = i },
-                                        text = { Text(title, fontWeight = if (configSubTab == i) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.bodySmall) }
-                                    )
+                            MainCategory.CONFIG -> {
+                                val configTabs = listOf("🔑 Variables & Secrets", "✉️ Email Routing")
+                                TabRow(
+                                    selectedTabIndex = configSubTab,
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    contentColor = MaterialTheme.colorScheme.primary
+                                ) {
+                                    configTabs.forEachIndexed { i, title ->
+                                        Tab(
+                                            selected = configSubTab == i,
+                                            onClick = { configSubTab = i },
+                                            text = { Text(title, fontWeight = if (configSubTab == i) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.bodySmall) }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -276,7 +295,6 @@ fun MainScreen() {
         },
         bottomBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
-                // 4 NAVIGATION BAR UTAMA (MATERIAL 3 NAVIGATION BAR)
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,
                     tonalElevation = 6.dp
@@ -305,7 +323,6 @@ fun MainScreen() {
                     }
                 }
 
-                // FOOTER WATERMARK PERMANEN DEDE FATHU
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     color = MaterialTheme.colorScheme.surfaceVariant
@@ -325,31 +342,72 @@ fun MainScreen() {
         }
     ) { padding ->
         Box(modifier = Modifier.padding(padding)) {
-            when (activeCategory) {
-                MainCategory.COMPUTE -> {
-                    when (computeSubTab) {
-                        0 -> WorkerEditorScreen()
-                        1 -> PagesScreen()
-                        2 -> RuntimeScreen()
+            if (activeAccount == null) {
+                // TAMPILAN AWAL SEBELUM ADA AKUN
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("👋", style = MaterialTheme.typography.displayMedium)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Selamat Datang di CF Manager!",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF1E293B)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Hubungkan akun Cloudflare kamu menggunakan Email & Global API Key untuk mulai mengelola Worker, DNS, Pages, dan R2 Storage secara langsung.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Button(
+                        onClick = {
+                            newAlias = "Akun Utama"
+                            newEmail = ""
+                            newApiKey = ""
+                            showAddDialog = true
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Text("➕ Hubungkan Akun Cloudflare Sekarang", fontWeight = FontWeight.Bold)
                     }
                 }
-                MainCategory.NETWORK -> {
-                    when (networkSubTab) {
-                        0 -> DomainScreen()
-                        1 -> DnsScreen()
-                        2 -> TunnelScreen()
-                        3 -> SslScreen()
+            } else {
+                when (activeCategory) {
+                    MainCategory.COMPUTE -> {
+                        when (computeSubTab) {
+                            0 -> WorkerEditorScreen()
+                            1 -> PagesScreen()
+                            2 -> RuntimeScreen()
+                        }
                     }
-                }
-                MainCategory.STORAGE -> {
-                    when (storageSubTab) {
-                        0 -> R2Screen()
+                    MainCategory.NETWORK -> {
+                        when (networkSubTab) {
+                            0 -> DomainScreen()
+                            1 -> DnsScreen()
+                            2 -> TunnelScreen()
+                            3 -> SslScreen()
+                        }
                     }
-                }
-                MainCategory.CONFIG -> {
-                    when (configSubTab) {
-                        0 -> VariablesScreen()
-                        1 -> EmailScreen()
+                    MainCategory.STORAGE -> {
+                        when (storageSubTab) {
+                            0 -> R2Screen()
+                        }
+                    }
+                    MainCategory.CONFIG -> {
+                        when (configSubTab) {
+                            0 -> VariablesScreen()
+                            1 -> EmailScreen()
+                        }
                     }
                 }
             }
@@ -393,117 +451,128 @@ fun MainScreen() {
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 340.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    itemsIndexed(accounts) { index, acc ->
-                        val isSelected = (index == activeIdx)
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable {
-                                    activeIdx = index
-                                    storage.setActiveIndex(index)
-                                    refreshActiveSession(acc)
-                                    showAccountSheet = false
-                                },
-                            color = if (isSelected) Color(0xFFFFF7ED) else MaterialTheme.colorScheme.surfaceVariant,
-                            border = if (isSelected) androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFF97316)) else null,
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Row(
+                if (accounts.isEmpty()) {
+                    Text(
+                        text = "Belum ada akun Cloudflare tersimpan.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 340.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        itemsIndexed(accounts) { index, acc ->
+                            val isSelected = (index == activeIdx)
+                            Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(14.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        activeIdx = index
+                                        storage.setActiveIndex(index)
+                                        refreshActiveSession(acc)
+                                        showAccountSheet = false
+                                    },
+                                color = if (isSelected) Color(0xFFFFF7ED) else MaterialTheme.colorScheme.surfaceVariant,
+                                border = if (isSelected) androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFF97316)) else null,
+                                shape = RoundedCornerShape(12.dp)
                             ) {
                                 Row(
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    val accInitial = (acc.alias.firstOrNull() ?: 'U').uppercaseChar().toString()
-                                    Box(
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .clip(CircleShape)
-                                            .background(
-                                                if (isSelected) Color(0xFFEA580C) else Color(0xFF64748B)
-                                            ),
-                                        contentAlignment = Alignment.Center
+                                    Row(
+                                        modifier = Modifier.weight(1f),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(
-                                            text = accInitial,
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-
-                                    Spacer(modifier = Modifier.width(12.dp))
-
-                                    Column {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                        val accInitial = (acc.alias.firstOrNull() ?: 'U').uppercaseChar().toString()
+                                        Box(
+                                            modifier = Modifier
+                                                .size(36.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    if (isSelected) Color(0xFFEA580C) else Color(0xFF64748B)
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
                                             Text(
-                                                text = acc.alias,
-                                                fontWeight = FontWeight.Bold,
-                                                style = MaterialTheme.typography.titleSmall
+                                                text = accInitial,
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Bold
                                             )
-                                            if (isSelected) {
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Surface(
-                                                    shape = RoundedCornerShape(4.dp),
-                                                    color = Color(0xFFEA580C)
-                                                ) {
-                                                    Text(
-                                                        text = "AKTIF",
-                                                        color = Color.White,
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        fontWeight = FontWeight.Bold,
-                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                                    )
+                                        }
+
+                                        Spacer(modifier = Modifier.width(12.dp))
+
+                                        Column {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = acc.alias,
+                                                    fontWeight = FontWeight.Bold,
+                                                    style = MaterialTheme.typography.titleSmall
+                                                )
+                                                if (isSelected) {
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Surface(
+                                                        shape = RoundedCornerShape(4.dp),
+                                                        color = Color(0xFFEA580C)
+                                                    ) {
+                                                        Text(
+                                                            text = "AKTIF",
+                                                            color = Color.White,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = FontWeight.Bold,
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                        )
+                                                    }
                                                 }
                                             }
+                                            Text(
+                                                text = if (acc.email.isNotBlank()) acc.email else "Email belum diisi",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.outline
+                                            )
+                                            Text(
+                                                text = "Key: " + (if (acc.apiKey.length > 8) acc.apiKey.take(6) + "••••••••" else "(Kosong)"),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontFamily = FontFamily.Monospace,
+                                                color = MaterialTheme.colorScheme.outline
+                                            )
                                         }
-                                        Text(
-                                            text = if (acc.email.isNotBlank()) acc.email else "Email belum diisi",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.outline
-                                        )
-                                        Text(
-                                            text = "Key: " + (if (acc.apiKey.length > 8) acc.apiKey.take(6) + "••••••••" else "(Kosong)"),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontFamily = FontFamily.Monospace,
-                                            color = MaterialTheme.colorScheme.outline
-                                        )
-                                    }
-                                }
-
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    IconButton(onClick = {
-                                        editTargetIdx = index
-                                        editAlias = acc.alias
-                                        editEmail = acc.email
-                                        editApiKey = acc.apiKey
-                                        showEditDialog = true
-                                    }) {
-                                        Text("✏️")
                                     }
 
-                                    if (accounts.size > 1) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(onClick = {
+                                            editTargetIdx = index
+                                            editAlias = acc.alias
+                                            editEmail = acc.email
+                                            editApiKey = acc.apiKey
+                                            showEditDialog = true
+                                        }) {
+                                            Text("✏️️")
+                                        }
+
                                         IconButton(onClick = {
                                             val updated = accounts.toMutableList().apply { removeAt(index) }
                                             accounts = updated
                                             storage.saveAccounts(updated)
-                                            if (activeIdx >= updated.size) {
-                                                activeIdx = 0
+                                            if (updated.isEmpty()) {
+                                                activeIdx = -1
                                                 storage.setActiveIndex(0)
+                                                refreshActiveSession(null)
+                                                showAccountSheet = false
+                                            } else {
+                                                if (activeIdx >= updated.size) activeIdx = 0
+                                                storage.setActiveIndex(activeIdx)
+                                                refreshActiveSession(updated[activeIdx])
                                             }
-                                            val curr = updated[activeIdx]
-                                            refreshActiveSession(curr)
                                         }) {
                                             Text("🗑")
                                         }
@@ -554,9 +623,10 @@ fun MainScreen() {
             confirmButton = {
                 Button(
                     onClick = {
-                        if (newAlias.isNotBlank()) {
+                        if (newEmail.isNotBlank() && newApiKey.isNotBlank()) {
                             val list = accounts.toMutableList()
-                            val newAcc = CfAccount(alias = newAlias, email = newEmail, apiKey = newApiKey)
+                            val name = if (newAlias.isNotBlank()) newAlias else newEmail.split("@")[0]
+                            val newAcc = CfAccount(alias = name, email = newEmail, apiKey = newApiKey)
                             list.add(newAcc)
                             accounts = list
                             storage.saveAccounts(list)
@@ -567,7 +637,8 @@ fun MainScreen() {
                             showAccountSheet = false
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A))
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A)),
+                    enabled = newEmail.isNotBlank() && newApiKey.isNotBlank()
                 ) {
                     Text("Simpan & Aktifkan")
                 }
