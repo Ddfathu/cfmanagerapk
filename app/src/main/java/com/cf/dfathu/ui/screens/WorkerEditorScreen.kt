@@ -30,12 +30,14 @@ import com.cf.dfathu.data.api.ApiClient
 import com.cf.dfathu.data.api.CfAccountHelper
 import com.cf.dfathu.data.local.AccountStorage
 import com.google.gson.Gson
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -102,9 +104,15 @@ fun WorkerEditorScreen() {
     var showRouteDialog by remember { mutableStateOf(false) }
     var activeWorkerForRoute by remember { mutableStateOf("") }
     var activeWorkerRoutes by remember { mutableStateOf<List<WorkerDomainItem>>(emptyList()) }
-    var newRouteDomainInput by remember { mutableStateOf("") }
     var isLoadingRoutes by remember { mutableStateOf(false) }
     var isAddingRoute by remember { mutableStateOf(false) }
+
+    // State untuk Subdomain & Dropdown CF Zones
+    var routeSubdomainInput by remember { mutableStateOf("") }
+    var cfZonesList by remember { mutableStateOf<List<String>>(emptyList()) }
+    var selectedZoneDomain by remember { mutableStateOf("") }
+    var isZoneDropdownExpanded by remember { mutableStateOf(false) }
+    var isLoadingZones by remember { mutableStateOf(false) }
 
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var workerToDelete by remember { mutableStateOf("") }
@@ -149,6 +157,41 @@ fun WorkerEditorScreen() {
                 }
             } catch (e: Exception) {
                 statusMsg = "Gagal baca file: " + e.message
+            }
+        }
+    }
+
+    // Load Zones / Domain utama dari akun Cloudflare
+    fun fetchCfZones() {
+        if (email.isBlank() || apiKey.isBlank()) return
+        scope.launch {
+            isLoadingZones = true
+            try {
+                val accId = CfAccountHelper.ensureAccountId()
+                val req = Request.Builder()
+                    .url("https://api.cloudflare.com/client/v4/zones?account.id=$accId&status=active&per_page=50")
+                    .header("X-Auth-Email", email)
+                    .header("X-Auth-Key", apiKey)
+                    .get().build()
+
+                val respStr = withContext(Dispatchers.IO) {
+                    val resp = httpClient.newCall(req).execute()
+                    resp.body?.string() ?: ""
+                }
+                val json = gson.fromJson(respStr, JsonObject::class.java)
+                val arr = json?.getAsJsonArray("result") ?: JsonArray()
+                val list = mutableListOf<String>()
+                arr.forEach { el ->
+                    val name = el.asJsonObject.get("name")?.asString ?: ""
+                    if (name.isNotBlank()) list.add(name)
+                }
+                cfZonesList = list
+                if (list.isNotEmpty() && selectedZoneDomain.isBlank()) {
+                    selectedZoneDomain = list[0]
+                }
+            } catch (_: Exception) {
+            } finally {
+                isLoadingZones = false
             }
         }
     }
@@ -478,8 +521,9 @@ fun WorkerEditorScreen() {
                         OutlinedButton(
                             onClick = {
                                 activeWorkerForRoute = wName
-                                newRouteDomainInput = ""
+                                routeSubdomainInput = ""
                                 loadWorkerRoutes(wName)
+                                fetchCfZones()
                                 showRouteDialog = true
                             },
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
@@ -925,6 +969,7 @@ fun WorkerEditorScreen() {
         }
     }
 
+    // --- DIALOG MODAL: CUSTOM DOMAIN RUTE WORKER ---
     if (showRouteDialog && activeWorkerForRoute.isNotBlank()) {
         Dialog(onDismissRequest = { showRouteDialog = false }) {
             Surface(
@@ -941,60 +986,123 @@ fun WorkerEditorScreen() {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("🌐 Custom Domain Rute", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            Text("Worker: " + activeWorkerForRoute, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                            Text("Worker: " + activeWorkerForRoute, style = MaterialTheme.typography.bodySmall, color = Color(0xFFEA580C))
                         }
-                        IconButton(onClick = { loadWorkerRoutes(activeWorkerForRoute) }, enabled = !isLoadingRoutes) {
-                            Text(if (isLoadingRoutes) "⏳" else "🔄")
+                        IconButton(
+                            onClick = {
+                                loadWorkerRoutes(activeWorkerForRoute)
+                                fetchCfZones()
+                            },
+                            enabled = !isLoadingRoutes && !isLoadingZones
+                        ) {
+                            Text(if (isLoadingRoutes || isLoadingZones) "⏳" else "🔄")
                         }
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    // 1. Kolom Subdomain
+                    OutlinedTextField(
+                        value = routeSubdomainInput,
+                        onValueChange = { routeSubdomainInput = it.lowercase().trim() },
+                        label = { Text("Subdomain") },
+                        placeholder = { Text("api / v2ray / @ (kosongkan jika apex)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 2. Dropdown Pilih Domain Utama (CF Zones)
+                    ExposedDropdownMenuBox(
+                        expanded = isZoneDropdownExpanded,
+                        onExpandedChange = { isZoneDropdownExpanded = !isZoneDropdownExpanded }
                     ) {
                         OutlinedTextField(
-                            value = newRouteDomainInput,
-                            onValueChange = { newRouteDomainInput = it.lowercase().trim() },
-                            label = { Text("Domain (cth: api.domainku.com)") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
+                            value = if (selectedZoneDomain.isBlank()) "Pilih Domain..." else selectedZoneDomain,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Pilih Domain Utama") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isZoneDropdownExpanded) },
+                            modifier = Modifier.menuAnchor().fillMaxWidth()
                         )
-                        Button(
-                            onClick = {
-                                if (newRouteDomainInput.isBlank()) return@Button
-                                scope.launch {
-                                    isAddingRoute = true
-                                    try {
-                                        val accId = CfAccountHelper.ensureAccountId()
-                                        val payload = mapOf(
-                                            "hostname" to newRouteDomainInput,
-                                            "service" to activeWorkerForRoute,
-                                            "environment" to "production"
-                                        )
-                                        val res = withContext(Dispatchers.IO) { ApiClient.api.putWorkerDomain(accId, payload) }
-                                        if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "✅ Domain terhubung!"
-                                            newRouteDomainInput = ""
-                                            loadWorkerRoutes(activeWorkerForRoute)
-                                            loadWorkers()
-                                        } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
-                                            statusMsg = "Gagal: " + err
-                                        }
-                                    } catch (e: Exception) {
-                                        statusMsg = "Error: " + e.message
-                                    } finally {
-                                        isAddingRoute = false
-                                    }
-                                }
-                            },
-                            enabled = !isAddingRoute && newRouteDomainInput.isNotBlank()
+                        ExposedDropdownMenu(
+                            expanded = isZoneDropdownExpanded,
+                            onDismissRequest = { isZoneDropdownExpanded = false }
                         ) {
-                            Text(if (isAddingRoute) "..." else "Tambah")
+                            if (cfZonesList.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("Gagal/Belum ada domain di CF") },
+                                    onClick = { isZoneDropdownExpanded = false }
+                                )
+                            } else {
+                                cfZonesList.forEach { z ->
+                                    DropdownMenuItem(
+                                        text = { Text("🌐 $z", fontWeight = FontWeight.Bold) },
+                                        onClick = {
+                                            selectedZoneDomain = z
+                                            isZoneDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
                         }
+                    }
+
+                    // Preview Target Domain
+                    val fullDomainTarget = remember(routeSubdomainInput, selectedZoneDomain) {
+                        val sub = routeSubdomainInput.trim().removeSuffix(".")
+                        if (sub.isBlank() || sub == "@") selectedZoneDomain else "$sub.$selectedZoneDomain"
+                    }
+
+                    if (selectedZoneDomain.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Target: https://$fullDomainTarget",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF16A34A),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Button(
+                        onClick = {
+                            if (selectedZoneDomain.isBlank()) return@Button
+                            scope.launch {
+                                isAddingRoute = true
+                                try {
+                                    val accId = CfAccountHelper.ensureAccountId()
+                                    val payload = mapOf(
+                                        "hostname" to fullDomainTarget,
+                                        "service" to activeWorkerForRoute,
+                                        "environment" to "production"
+                                    )
+                                    val res = withContext(Dispatchers.IO) { ApiClient.api.putWorkerDomain(accId, payload) }
+                                    if (res.isSuccessful && res.body()?.success == true) {
+                                        statusMsg = "✅ Domain $fullDomainTarget terhubung!"
+                                        Toast.makeText(context, "✅ Domain $fullDomainTarget terpasang!", Toast.LENGTH_SHORT).show()
+                                        routeSubdomainInput = ""
+                                        loadWorkerRoutes(activeWorkerForRoute)
+                                        loadWorkers()
+                                    } else {
+                                        val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                        statusMsg = "Gagal: " + err
+                                        Toast.makeText(context, "Gagal: $err", Toast.LENGTH_SHORT).show()
+                                    }
+                                } catch (e: Exception) {
+                                    statusMsg = "Error: " + e.message
+                                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                } finally {
+                                    isAddingRoute = false
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isAddingRoute && selectedZoneDomain.isNotBlank()
+                    ) {
+                        Text(if (isAddingRoute) "Memproses..." else "Tambah Custom Domain")
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -1036,6 +1144,7 @@ fun WorkerEditorScreen() {
                                                         val res = withContext(Dispatchers.IO) { ApiClient.api.deleteWorkerDomain(accId, r.id) }
                                                         if (res.isSuccessful && res.body()?.success == true) {
                                                             statusMsg = "🗑 Rute domain " + r.hostname + " dicopot!"
+                                                            Toast.makeText(context, "🗑 Domain ${r.hostname} dicopot!", Toast.LENGTH_SHORT).show()
                                                             loadWorkerRoutes(activeWorkerForRoute)
                                                             loadWorkers()
                                                         }

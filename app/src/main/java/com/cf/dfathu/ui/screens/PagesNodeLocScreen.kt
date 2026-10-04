@@ -1,5 +1,6 @@
 package com.cf.dfathu.ui.screens
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
@@ -28,6 +29,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.documentfile.provider.DocumentFile
 import com.cf.dfathu.data.AppConfig
 import com.cf.dfathu.data.api.CfAccountHelper
 import com.cf.dfathu.data.local.AccountStorage
@@ -35,6 +37,7 @@ import com.cf.dfathu.data.model.CfAccount
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -46,6 +49,7 @@ import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.util.zip.ZipInputStream
 
 // --- HELPER SAFE GSON EXTENSIONS ---
 fun JsonObject.getObj(key: String): JsonObject? =
@@ -61,6 +65,12 @@ data class CfPagesProjectItem(
     val name: String,
     val subdomain: String,
     val rawJsonObject: JsonObject
+)
+
+data class NodeLocAccountItem(
+    val id: String = UUID.randomUUID().toString(),
+    val alias: String,
+    val token: String
 )
 
 data class NodeLocDomainItem(
@@ -95,6 +105,47 @@ fun PagesNodeLocScreen() {
     val currAcc = allAccounts.getOrNull(activeIdx)
     val email = AppConfig.activeEmail.ifBlank { currAcc?.email ?: "" }
     val apiKey = AppConfig.activeApiKey.ifBlank { currAcc?.apiKey ?: "" }
+
+    val gson = remember { Gson() }
+
+    // PREFERENCES UNTUK SIMPAN MULTI-ACCOUNT NODELOC TERIMPOR
+    val nlPrefs = remember { context.getSharedPreferences("nodeloc_prefs", Context.MODE_PRIVATE) }
+    
+    // Load list akun NodeLoc dari SharedPreferences
+    val nodeLocAccounts = remember {
+        mutableStateListOf<NodeLocAccountItem>().apply {
+            val jsonStr = nlPrefs.getString("nl_accounts_list", "[]") ?: "[]"
+            try {
+                val type = object : TypeToken<List<NodeLocAccountItem>>() {}.type
+                val list: List<NodeLocAccountItem> = gson.fromJson(jsonStr, type) ?: emptyList()
+                addAll(list)
+            } catch (_: Exception) {}
+        }
+    }
+
+    var selectedNlAccountIdx by remember { 
+        mutableStateOf(nlPrefs.getInt("selected_nl_idx", 0).coerceAtLeast(0)) 
+    }
+    
+    val selectedNlAccount = nodeLocAccounts.getOrNull(selectedNlAccountIdx)
+    var nodeLocTokenInput by remember { mutableStateOf(selectedNlAccount?.token ?: "") }
+
+    fun saveNlAccountsToPrefs() {
+        val jsonStr = gson.toJson(nodeLocAccounts.toList())
+        nlPrefs.edit()
+            .putString("nl_accounts_list", jsonStr)
+            .putInt("selected_nl_idx", selectedNlAccountIdx)
+            .apply()
+    }
+
+    LaunchedEffect(selectedNlAccount) {
+        nodeLocTokenInput = selectedNlAccount?.token ?: ""
+    }
+
+    var showNlAccountManagerModal by remember { mutableStateOf(false) }
+    var newNlAliasInput by remember { mutableStateOf("") }
+    var newNlTokenInput by remember { mutableStateOf("") }
+    var nlAccountDropdownExpanded by remember { mutableStateOf(false) }
 
     var mainTab by remember { mutableStateOf(0) }
     val tabTitles = listOf("🚀 Single Pages", "⚡ Bulk Deploy", "🌐 NodeLoc DNS")
@@ -140,7 +191,6 @@ fun PagesNodeLocScreen() {
     var pagesDomainList by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
     var domainSyncLog by remember { mutableStateOf("") }
 
-    var nodeLocTokenInput by remember { mutableStateOf(allAccounts.firstOrNull()?.apiKey ?: "") }
     var nodeLocDomains by remember { mutableStateOf<List<NodeLocDomainItem>>(emptyList()) }
     var selectedNlDomain by remember { mutableStateOf<NodeLocDomainItem?>(null) }
     var nlDomainExpanded by remember { mutableStateOf(false) }
@@ -165,7 +215,6 @@ fun PagesNodeLocScreen() {
     var isProcessing by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
-    val gson = remember { Gson() }
 
     val httpClient = remember {
         OkHttpClient.Builder()
@@ -193,6 +242,77 @@ fun PagesNodeLocScreen() {
                 Toast.makeText(context, "✅ File berhasil dimuat!", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(context, "Gagal membaca file: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val zipPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            try {
+                val inputStream = context.contentResolver.openInputStream(it)
+                val zis = ZipInputStream(inputStream)
+                var entry = zis.nextEntry
+                var foundWorker = false
+                var foundHtml = false
+
+                while (entry != null) {
+                    val name = entry.name.lowercase()
+                    if (name.endsWith("_worker.js") || name.endsWith("worker.js")) {
+                        val content = zis.bufferedReader().readText()
+                        if (filePickerTarget.contains("bulk")) bulkWorkerScriptInput = content else rawWorkerScriptInput = content
+                        foundWorker = true
+                    } else if (name.endsWith("index.html") || name.endsWith("html")) {
+                        val content = zis.bufferedReader().readText()
+                        if (filePickerTarget.contains("bulk")) bulkHtmlInput = content else rawHtmlInput = content
+                        foundHtml = true
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                }
+                zis.close()
+
+                if (foundWorker || foundHtml) {
+                    Toast.makeText(context, "📦 Extracted ZIP: Worker($foundWorker), HTML($foundHtml)", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "⚠️ Tidak ditemukan _worker.js / index.html di ZIP", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Gagal ektrak ZIP: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        uri?.let { treeUri ->
+            try {
+                val rootDoc = DocumentFile.fromTreeUri(context, treeUri)
+                var foundWorker = false
+                var foundHtml = false
+
+                rootDoc?.listFiles()?.forEach { file ->
+                    val name = file.name?.lowercase() ?: ""
+                    if (name == "_worker.js" || name == "worker.js") {
+                        val content = context.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use { it.readText() } ?: ""
+                        if (filePickerTarget.contains("bulk")) bulkWorkerScriptInput = content else rawWorkerScriptInput = content
+                        foundWorker = true
+                    } else if (name == "index.html" || name.endsWith(".html")) {
+                        val content = context.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use { it.readText() } ?: ""
+                        if (filePickerTarget.contains("bulk")) bulkHtmlInput = content else rawHtmlInput = content
+                        foundHtml = true
+                    }
+                }
+
+                if (foundWorker || foundHtml) {
+                    Toast.makeText(context, "📁 Folder Dimuat! Worker($foundWorker), HTML($foundHtml)", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "⚠️️ Tidak ada _worker.js / index.html di folder ini", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Gagal baca folder: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -390,7 +510,7 @@ fun PagesNodeLocScreen() {
 
     fun loadNodeLocDomains() {
         if (nodeLocTokenInput.isBlank()) {
-            statusMsg = "⚠ Masukkan Token JWT NodeLoc terlebih dahulu!"
+            statusMsg = "⚠ Pilih atau masukkan Token JWT NodeLoc terlebih dahulu!"
             return
         }
         scope.launch {
@@ -726,6 +846,41 @@ fun PagesNodeLocScreen() {
                             modifier = Modifier.fillMaxWidth()
                         )
 
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Button(
+                                onClick = {
+                                    filePickerTarget = "worker_bulk"
+                                    folderPickerLauncher.launch(null)
+                                },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7))
+                            ) {
+                                Text("📁 Folder", style = MaterialTheme.typography.labelSmall)
+                            }
+
+                            Button(
+                                onClick = {
+                                    filePickerTarget = "worker_bulk"
+                                    zipPickerLauncher.launch("application/zip")
+                                },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED))
+                            ) {
+                                Text("📦 ZIP", style = MaterialTheme.typography.labelSmall)
+                            }
+
+                            Button(
+                                onClick = {
+                                    filePickerTarget = "worker_bulk"
+                                    filePickerLauncher.launch("*/*")
+                                },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C))
+                            ) {
+                                Text("📄 File", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -755,8 +910,8 @@ fun PagesNodeLocScreen() {
                             contentAlignment = Alignment.Center
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("📁 DRAG & DROP FILE _worker.js KE SINI", fontWeight = FontWeight.Bold, color = Color(0xFFEA580C), style = MaterialTheme.typography.labelMedium)
-                                Text("Atau Klik Area Ini Untuk Pilih File JS / Script", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                Text("📥 DRAG & DROP FILE / KLIK PILIH FILE", fontWeight = FontWeight.Bold, color = Color(0xFFEA580C), style = MaterialTheme.typography.labelMedium)
+                                Text("Bisa Langsung Drag File _worker.js / Script", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                             }
                         }
 
@@ -844,30 +999,67 @@ fun PagesNodeLocScreen() {
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Text("🔑 Autentikasi NodeLoc JWT", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(8.dp))
-
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            OutlinedTextField(
-                                value = nodeLocTokenInput,
-                                onValueChange = { nodeLocTokenInput = it.trim() },
-                                label = { Text("JWT Token NodeLoc") },
-                                placeholder = { Text("eyJhbGciOi...") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f)
-                            )
+                            Text("🔑 Autentikasi Multi-Akun NodeLoc", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                             Button(
-                                onClick = { loadNodeLocDomains() },
-                                enabled = !isProcessing && nodeLocTokenInput.isNotBlank(),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7))
+                                onClick = { showNlAccountManagerModal = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
                             ) {
-                                Text(if (isProcessing) "..." else "Load")
+                                Text("⚙️ Kelola Akun (${nodeLocAccounts.size})", style = MaterialTheme.typography.labelSmall)
                             }
+                        }
+
+                        // DROPDOWN MULTI-AKUN NODELOC
+                        ExposedDropdownMenuBox(
+                            expanded = nlAccountDropdownExpanded,
+                            onExpandedChange = { nlAccountDropdownExpanded = !nlAccountDropdownExpanded }
+                        ) {
+                            OutlinedTextField(
+                                value = selectedNlAccount?.alias ?: if (nodeLocAccounts.isEmpty()) "Belum ada akun NodeLoc..." else "Pilih Akun NodeLoc...",
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Pilih Akun NodeLoc Active") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = nlAccountDropdownExpanded) },
+                                modifier = Modifier.menuAnchor().fillMaxWidth()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = nlAccountDropdownExpanded,
+                                onDismissRequest = { nlAccountDropdownExpanded = false }
+                            ) {
+                                if (nodeLocAccounts.isEmpty()) {
+                                    DropdownMenuItem(
+                                        text = { Text("⚠️ Klik 'Kelola Akun' untuk tambah token baru") },
+                                        onClick = { nlAccountDropdownExpanded = false }
+                                    )
+                                } else {
+                                    nodeLocAccounts.forEachIndexed { idx, acc ->
+                                        DropdownMenuItem(
+                                            text = { Text("🔑 ${acc.alias}", fontWeight = FontWeight.Bold) },
+                                            onClick = {
+                                                selectedNlAccountIdx = idx
+                                                nodeLocTokenInput = acc.token
+                                                saveNlAccountsToPrefs()
+                                                nlAccountDropdownExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Button(
+                            onClick = { loadNodeLocDomains() },
+                            enabled = !isProcessing && nodeLocTokenInput.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7))
+                        ) {
+                            Text(if (isProcessing) "Memuat Domain..." else "🔍 Load Domain NodeLoc")
                         }
                     }
                 }
@@ -1139,49 +1331,127 @@ fun PagesNodeLocScreen() {
         }
     }
 
+    // MODAL POPUP: KELOLA MULTI-AKUN NODELOC
+    if (showNlAccountManagerModal) {
+        AlertDialog(
+            onDismissRequest = { showNlAccountManagerModal = false },
+            title = { Text("🔑 Kelola Akun NodeLoc", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Tambah Token NodeLoc Baru:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+
+                    OutlinedTextField(
+                        value = newNlAliasInput,
+                        onValueChange = { newNlAliasInput = it },
+                        label = { Text("Alias / Label Akun") },
+                        placeholder = { Text("Akun NodeLoc Utama") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = newNlTokenInput,
+                        onValueChange = { newNlTokenInput = it.trim() },
+                        label = { Text("JWT Token NodeLoc") },
+                        placeholder = { Text("eyJhbGciOi...") },
+                        modifier = Modifier.fillMaxWidth().height(90.dp)
+                    )
+
+                    Button(
+                        onClick = {
+                            if (newNlAliasInput.isNotBlank() && newNlTokenInput.isNotBlank()) {
+                                nodeLocAccounts.add(NodeLocAccountItem(alias = newNlAliasInput, token = newNlTokenInput))
+                                selectedNlAccountIdx = nodeLocAccounts.size - 1
+                                nodeLocTokenInput = newNlTokenInput
+                                saveNlAccountsToPrefs()
+                                newNlAliasInput = ""
+                                newNlTokenInput = ""
+                                Toast.makeText(context, "✅ Akun NodeLoc Ditambahkan!", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = newNlAliasInput.isNotBlank() && newNlTokenInput.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7))
+                    ) {
+                        Text("➕ Simpan Akun NodeLoc")
+                    }
+
+                    Divider()
+
+                    Text("Daftar Akun Tersimpan (${nodeLocAccounts.size}):", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+
+                    LazyColumn(modifier = Modifier.fillMaxWidth().height(140.dp)) {
+                        items(nodeLocAccounts.size) { idx ->
+                            val acc = nodeLocAccounts[idx]
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(acc.alias, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                                    Text("${acc.token.take(15)}...", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                }
+                                IconButton(onClick = {
+                                    nodeLocAccounts.removeAt(idx)
+                                    if (selectedNlAccountIdx >= nodeLocAccounts.size) {
+                                        selectedNlAccountIdx = (nodeLocAccounts.size - 1).coerceAtLeast(0)
+                                    }
+                                    saveNlAccountsToPrefs()
+                                }, modifier = Modifier.size(28.dp)) {
+                                    Text("🗑")
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showNlAccountManagerModal = false }) { Text("Tutup") }
+            }
+        )
+    }
+
     if (showDeployDialog) {
         AlertDialog(
             onDismissRequest = { if (!isProcessing) showDeployDialog = false },
             title = { Text("🚀 Deploy Studio: $targetDeployProject", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Fetch Script dari Raw URL (GitHub / Pastebin):", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = rawFetchUrlInput,
-                            onValueChange = { rawFetchUrlInput = it.trim() },
-                            label = { Text("URL Raw Script") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Button(onClick = {
-                            if (rawFetchUrlInput.isBlank()) return@Button
-                            scope.launch {
-                                isProcessing = true
-                                statusMsg = "Mengambil raw script..."
-                                try {
-                                    val req = Request.Builder().url(rawFetchUrlInput).get().build()
-                                    val scriptText = withContext(Dispatchers.IO) {
-                                        val resp = httpClient.newCall(req).execute()
-                                        resp.body?.string() ?: ""
-                                    }
-                                    if (targetFetchInject == "worker") {
-                                        rawWorkerScriptInput = scriptText
-                                    } else {
-                                        rawHtmlInput = scriptText
-                                    }
-                                    statusMsg = "✅ Script berhasil dimasukkan ke editor!"
-                                } catch (e: Exception) {
-                                    statusMsg = "Gagal fetch raw: " + e.message
-                                } finally {
-                                    isProcessing = false
-                                }
-                            }
-                        }) {
-                            Text("Fetch", style = MaterialTheme.typography.labelSmall)
+                    Text("3 Opsi Impor File Studio:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(
+                            onClick = {
+                                filePickerTarget = "worker_single"
+                                folderPickerLauncher.launch(null)
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7))
+                        ) {
+                            Text("📁 Folder", style = MaterialTheme.typography.labelSmall)
+                        }
+
+                        Button(
+                            onClick = {
+                                filePickerTarget = "worker_single"
+                                zipPickerLauncher.launch("application/zip")
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED))
+                        ) {
+                            Text("📦 ZIP", style = MaterialTheme.typography.labelSmall)
+                        }
+
+                        Button(
+                            onClick = {
+                                filePickerTarget = "worker_single"
+                                filePickerLauncher.launch("*/*")
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C))
+                        ) {
+                            Text("📄 File", style = MaterialTheme.typography.labelSmall)
                         }
                     }
 
@@ -1215,7 +1485,7 @@ fun PagesNodeLocScreen() {
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("📥 DRAG & DROP FILE _worker.js DI SINI", fontWeight = FontWeight.Bold, color = Color(0xFF16A34A), style = MaterialTheme.typography.labelMedium)
-                            Text("Atau Klik Untuk Memilih File dari HP", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                            Text("Atau Gunakan Tombol 3 Opsi di Atas", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                         }
                     }
 
@@ -1443,7 +1713,6 @@ fun PagesNodeLocScreen() {
         )
     }
 
-    // --- POP-UP MODAL: CUSTOM DOMAIN MANAGER (DENGAN REFRESH & HAPUS DOMAIN) ---
     if (showDomainModal) {
         AlertDialog(
             onDismissRequest = { showDomainModal = false },
