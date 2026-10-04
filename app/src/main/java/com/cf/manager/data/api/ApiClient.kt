@@ -40,8 +40,9 @@ data class CfBindingListResponse(
     val result: List<JsonObject>?
 )
 
-// ==================== 2. INTERFACE WORKER API ====================
+// ==================== 2. INTERFACE WORKER API LENGKAP ====================
 interface WorkerApi {
+    // --- WORKERS & DOMAINS ---
     @GET("accounts/{accountId}/workers/services")
     suspend fun listWorkers(@Path("accountId") accountId: String): Response<CfListResponse>
 
@@ -87,7 +88,6 @@ interface WorkerApi {
         @Path("scriptName") scriptName: String
     ): Response<CfStandardResponse>
 
-    // --- SUBDOMAIN WORKERS.DEV & BINDINGS ---
     @GET("accounts/{accountId}/workers/subdomain")
     suspend fun getAccountSubdomain(
         @Path("accountId") accountId: String
@@ -106,6 +106,74 @@ interface WorkerApi {
         @Path("serviceName") serviceName: String,
         @Part settings: MultipartBody.Part
     ): Response<CfStandardResponse>
+
+    // --- ZONES & DOMAIN UTAMA ---
+    @GET("zones")
+    suspend fun listZones(@Query("account.id") accountId: String? = null): Response<CfListResponse>
+
+    @POST("zones")
+    suspend fun createZone(@Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    @DELETE("zones/{zoneId}")
+    suspend fun deleteZone(@Path("zoneId") zoneId: String): Response<CfStandardResponse>
+
+    // --- DNS RECORDS ---
+    @GET("zones/{zoneId}/dns_records")
+    suspend fun listDns(@Path("zoneId") zoneId: String, @Query("per_page") perPage: Int = 100): Response<CfListResponse>
+
+    @POST("zones/{zoneId}/dns_records")
+    suspend fun createDns(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    @PUT("zones/{zoneId}/dns_records/{recordId}")
+    suspend fun updateDns(@Path("zoneId") zoneId: String, @Path("recordId") recordId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    @DELETE("zones/{zoneId}/dns_records/{recordId}")
+    suspend fun deleteDns(@Path("zoneId") zoneId: String, @Path("recordId") recordId: String): Response<CfStandardResponse>
+
+    // --- EMAIL ROUTING ---
+    @GET("accounts/{accountId}/email/routing/addresses")
+    suspend fun listEmailDestinations(@Path("accountId") accountId: String): Response<CfListResponse>
+
+    @GET("zones/{zoneId}/email/routing/rules")
+    suspend fun listEmailRules(@Path("zoneId") zoneId: String): Response<CfListResponse>
+
+    @GET("zones/{zoneId}/email/routing/rules/catch_all")
+    suspend fun getEmailCatchAll(@Path("zoneId") zoneId: String): Response<CfStandardResponse>
+
+    @POST("zones/{zoneId}/email/routing/rules")
+    suspend fun createEmailRule(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    @DELETE("zones/{zoneId}/email/routing/rules/{ruleId}")
+    suspend fun deleteEmailRule(@Path("zoneId") zoneId: String, @Path("ruleId") ruleId: String): Response<CfStandardResponse>
+
+    // --- TUNNELS ---
+    @GET("accounts/{accountId}/cfd_tunnel")
+    suspend fun listTunnels(@Path("accountId") accountId: String, @Query("is_deleted") isDeleted: Boolean = false): Response<CfListResponse>
+
+    @POST("accounts/{accountId}/cfd_tunnel")
+    suspend fun createTunnel(@Path("accountId") accountId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    @DELETE("accounts/{accountId}/cfd_tunnel/{tunnelId}")
+    suspend fun deleteTunnel(@Path("accountId") accountId: String, @Path("tunnelId") tunnelId: String): Response<CfStandardResponse>
+
+    @GET("accounts/{accountId}/cfd_tunnel/{tunnelId}/token")
+    suspend fun getTunnelToken(@Path("accountId") accountId: String, @Path("tunnelId") tunnelId: String): Response<CfStandardResponse>
+
+    @GET("accounts/{accountId}/cfd_tunnel/{tunnelId}/configurations")
+    suspend fun getTunnelConfigurations(@Path("accountId") accountId: String, @Path("tunnelId") tunnelId: String): Response<CfStandardResponse>
+
+    @PUT("accounts/{accountId}/cfd_tunnel/{tunnelId}/configurations")
+    suspend fun updateTunnelConfigurations(@Path("accountId") accountId: String, @Path("tunnelId") tunnelId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    // --- R2 BUCKETS ---
+    @GET("accounts/{accountId}/r2/buckets")
+    suspend fun listR2Buckets(@Path("accountId") accountId: String): Response<JsonObject>
+
+    @POST("accounts/{accountId}/r2/buckets")
+    suspend fun createR2Bucket(@Path("accountId") accountId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    @DELETE("accounts/{accountId}/r2/buckets/{bucketName}")
+    suspend fun deleteR2Bucket(@Path("accountId") accountId: String, @Path("bucketName") bucketName: String): Response<CfStandardResponse>
 }
 
 // ==================== 3. OBJECT API CLIENT ====================
