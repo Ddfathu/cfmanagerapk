@@ -1,5 +1,6 @@
 package com.cf.manager.ui.screens
 
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.documentfile.provider.DocumentFile
@@ -32,10 +34,13 @@ import com.cf.manager.data.api.CfAccountHelper
 import com.cf.manager.data.local.AccountStorage
 import com.cf.manager.data.local.PagesDeploySnapshot
 import com.cf.manager.data.local.PagesHistoryStorage
+import com.google.gson.Gson
 import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.net.URL
 
 data class PagesCustomDomainItem(
@@ -58,34 +63,40 @@ fun PagesScreen() {
     val apiKey = AppConfig.activeApiKey.ifBlank { currAcc?.apiKey ?: "" }
 
     var selectedPagesTab by remember { mutableStateOf(0) }
-    val pagesTabTitles = listOf("📋 Project", "🚀 Buat / Deploy", "⚡ Bulk Multi-Akun")
+    val pagesTabTitles = listOf("📋 Project", "➕ Buat Project", "🚀 Deploy Studio", "⚡ Bulk Akun")
 
     var projects by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoadingProjects by remember { mutableStateOf(false) }
     var statusMsg by remember { mutableStateOf("") }
 
-    // State Buat Project Baru / Deploy
-    var newProjectName by remember { mutableStateOf("") }
-    var newRawUrl by remember { mutableStateOf("") }
-    var rawTargetTab by remember { mutableStateOf(0) }
-    var isFetchingNewRaw by remember { mutableStateOf(false) }
-    var isDeployingNew by remember { mutableStateOf(false) }
-    var isPullingDeploy by remember { mutableStateOf(false) }
+    // --- TAB 1: FORM BUAT PROJECT BARU (DOH 1.1.1.1 CHECK PERSIS SC WEB) ---
+    var newCreateProjectName by remember { mutableStateOf("") }
+    var newCreateCompatDate by remember { mutableStateOf("2024-01-01") }
+    var newCreateEnableNodeCompat by remember { mutableStateOf(true) }
+    var isCheckingSubdomain by remember { mutableStateOf(false) }
+    var subdomainCheckMsg by remember { mutableStateOf("") }
+    var isSubdomainAvailable by remember { mutableStateOf<Boolean?>(null) }
+    var isCreatingNewProject by remember { mutableStateOf(false) }
 
-    // State Runtime Pages (Default 2024-01-01 & nodejs_compat)
-    var pagesCompatDate by remember { mutableStateOf("2024-01-01") }
-    var pagesEnableNodeCompat by remember { mutableStateOf(true) }
-
+    // --- TAB 2: DEPLOY STUDIO ---
+    var targetProjectName by remember { mutableStateOf("") }
+    var deployCompatDate by remember { mutableStateOf("2024-01-01") }
+    var deployEnableNodeCompat by remember { mutableStateOf(true) }
     var selectedFolderInfo by remember { mutableStateOf("") }
     var editorCodeTab by remember { mutableStateOf(0) }
     var htmlContent by remember { mutableStateOf("<!DOCTYPE html>\n<html>\n<head><title>My Pages</title></head>\n<body>\n  <h1>Live from Android Pages Studio!</h1>\n</body>\n</html>") }
     var workerScript by remember { mutableStateOf("export default {\n  async fetch(request, env) {\n    return new Response(\"Hello from Pages _worker.js!\");\n  }\n};") }
+    var workerRawUrl by remember { mutableStateOf("") }
+    var rawTargetTab by remember { mutableStateOf(0) }
+    var isFetchingRaw by remember { mutableStateOf(false) }
+    var isDeploying by remember { mutableStateOf(false) }
+    var isPullingLatest by remember { mutableStateOf(false) }
 
-    // State Smart Wrangler AST Analysis
+    // Smart Wrangler
     var detectedBindings by remember { mutableStateOf<List<DetectedBinding>>(emptyList()) }
     var showWranglerModal by remember { mutableStateOf(false) }
 
-    // State Pop-up Kelola Domain
+    // Pop-up Domain
     var showDomainDialog by remember { mutableStateOf(false) }
     var activeProjectForDomain by remember { mutableStateOf("") }
     var customDomainInput by remember { mutableStateOf("") }
@@ -93,17 +104,70 @@ fun PagesScreen() {
     var registeredDomains by remember { mutableStateOf<List<PagesCustomDomainItem>>(emptyList()) }
     var isLoadingDomains by remember { mutableStateOf(false) }
 
-    // State Dialog Hapus Project
+    // Dialog Hapus
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var projectToDelete by remember { mutableStateOf("") }
 
-    // State Bulk Multi-Akun
+    // Bulk Multi-Akun
     var selectedAccountIndices by remember { mutableStateOf(setOf<Int>()) }
     var bulkProjectName by remember { mutableStateOf("") }
     var isBulkRunning by remember { mutableStateOf(false) }
     var bulkLogs by remember { mutableStateOf<List<String>>(emptyList()) }
 
     val scope = rememberCoroutineScope()
+    val gson = remember { Gson() }
+
+    fun openBrowser(urlStr: String) {
+        try {
+            val validUrl = if (!urlStr.startsWith("http://") && !urlStr.startsWith("https://")) "https://$urlStr" else urlStr
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(validUrl)).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {}
+    }
+
+    // CEK KETERSEDIAAN SUBDOMAIN VIA DOH CLOUDFLARE 1.1.1.1 (PERSIS SC WEB)
+    fun checkSubdomainWithDoh(nameInput: String) {
+        val name = nameInput.trim().lowercase()
+        if (name.isBlank()) {
+            subdomainCheckMsg = "Ketik nama project terlebih dahulu!"
+            isSubdomainAvailable = null
+            return
+        }
+        val targetDomain = "$name.pages.dev"
+        scope.launch {
+            isCheckingSubdomain = true
+            subdomainCheckMsg = "⏳ Mengecek ketersediaan $targetDomain via DoH 1.1.1.1..."
+            isSubdomainAvailable = null
+            try {
+                val client = OkHttpClient()
+                val request = Request.Builder()
+                    .url("https://1.1.1.1/dns-query?name=" + targetDomain + "&type=A")
+                    .header("Accept", "application/dns-json")
+                    .build()
+
+                val response = withContext(Dispatchers.IO) { client.newCall(request).execute() }
+                val respText = response.body?.string() ?: ""
+                val json = gson.fromJson(respText, JsonObject::class.java)
+                val status = json.get("Status")?.asInt ?: 0
+
+                // Status 3 = NXDOMAIN (Domain belum ada / belum terdaftar = TERSEDIA)
+                if (status == 3) {
+                    isSubdomainAvailable = true
+                    subdomainCheckMsg = "🟢 $targetDomain TERSEDIA! URL aman & unik."
+                } else {
+                    isSubdomainAvailable = false
+                    subdomainCheckMsg = "🔴 $targetDomain SUDAH TERPAKAI! Cloudflare akan menambahkan angka acak."
+                }
+            } catch (e: Exception) {
+                isSubdomainAvailable = null
+                subdomainCheckMsg = "Gagal memeriksa DNS: " + e.message
+            } finally {
+                isCheckingSubdomain = false
+            }
+        }
+    }
 
     fun loadCustomDomains(projectName: String) {
         if (projectName.isBlank() || email.isBlank() || apiKey.isBlank()) return
@@ -135,7 +199,6 @@ fun PagesScreen() {
         }
     }
 
-    // Fungsi Tarik Deploy Terakhir (Snapshot Lokal maupun Konfigurasi Cloudflare)
     fun pullLatestDeployment(pName: String) {
         if (pName.isBlank()) {
             statusMsg = "Pilih atau isi nama project terlebih dahulu!"
@@ -143,29 +206,29 @@ fun PagesScreen() {
         }
         val snapshot = historyStorage.getSnapshot(pName)
         if (snapshot != null) {
-            newProjectName = snapshot.projectName
+            targetProjectName = snapshot.projectName
             htmlContent = snapshot.htmlContent
             workerScript = snapshot.workerScript
-            pagesCompatDate = snapshot.compatDate
-            pagesEnableNodeCompat = snapshot.enableNodeCompat
+            deployCompatDate = snapshot.compatDate
+            deployEnableNodeCompat = snapshot.enableNodeCompat
             detectedBindings = SmartWranglerParser.parseScriptBindings(snapshot.workerScript)
-            statusMsg = "📥 Berhasil menarik snapshot deploy terakhir '$pName' beserta Runtime ${snapshot.compatDate}!"
+            statusMsg = "📥 Berhasil menarik snapshot deploy terakhir '$pName'!"
         } else {
             scope.launch {
-                isPullingDeploy = true
+                isPullingLatest = true
                 try {
                     val accId = CfAccountHelper.ensureAccountId()
                     val res = ApiClient.api.listPagesProjects(accId)
                     if (res.isSuccessful && res.body()?.success == true) {
                         val matched = res.body()?.result?.find { it.get("name")?.asString.equals(pName, ignoreCase = true) }
                         if (matched != null) {
-                            newProjectName = pName
+                            targetProjectName = pName
                             val prodCfg = matched.getAsJsonObject("deployment_configs")?.getAsJsonObject("production")
                             val cDate = prodCfg?.get("compatibility_date")?.asString ?: "2024-01-01"
                             val flags = prodCfg?.getAsJsonArray("compatibility_flags")?.map { it.asString } ?: emptyList()
-                            pagesCompatDate = cDate
-                            pagesEnableNodeCompat = flags.contains("nodejs_compat")
-                            statusMsg = "📥 Berhasil memuat project '$pName' dari Cloudflare (Runtime: $cDate)!"
+                            deployCompatDate = cDate
+                            deployEnableNodeCompat = flags.contains("nodejs_compat")
+                            statusMsg = "📥 Berhasil memuat project '$pName' dari Cloudflare!"
                         } else {
                             statusMsg = "Project '$pName' tidak ditemukan di Cloudflare."
                         }
@@ -173,7 +236,7 @@ fun PagesScreen() {
                 } catch (e: Exception) {
                     statusMsg = "Gagal tarik data: " + e.message
                 } finally {
-                    isPullingDeploy = false
+                    isPullingLatest = false
                 }
             }
         }
@@ -211,11 +274,11 @@ fun PagesScreen() {
                         }
 
                         val dirName = root.name ?: "ProjectFolder"
-                        if (newProjectName.isBlank()) {
-                            newProjectName = dirName.lowercase().replace("[^a-z0-9-]".toRegex(), "-")
+                        if (targetProjectName.isBlank()) {
+                            targetProjectName = dirName.lowercase().replace("[^a-z0-9-]".toRegex(), "-")
                         }
                         if (bulkProjectName.isBlank()) {
-                            bulkProjectName = newProjectName
+                            bulkProjectName = targetProjectName
                         }
 
                         selectedFolderInfo = "📁 Folder '$dirName' ($fileCount file) dipilih."
@@ -316,8 +379,8 @@ fun PagesScreen() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("📄 Cloudflare Pages", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("Snapshot Restore, Runtime Node & Smart Wrangler", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("📄 Cloudflare Pages Hub", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Pengecekan DoH 1.1.1.1, Deploy Studio & Bulk", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                 }
                 IconButton(onClick = { loadProjects() }, enabled = !isLoadingProjects) {
                     Text(if (isLoadingProjects) "⏳" else "🔄")
@@ -326,7 +389,7 @@ fun PagesScreen() {
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            PrimaryTabRow(selectedPagesTab) {
+            PrimaryTabRow(selectedTabIndex = selectedPagesTab) {
                 pagesTabTitles.forEachIndexed { idx, title ->
                     Tab(
                         selected = selectedPagesTab == idx,
@@ -347,10 +410,7 @@ fun PagesScreen() {
                 ) {
                     Text("Daftar Project Pages Aktif (${projects.size}):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Button(
-                        onClick = {
-                            newProjectName = ""
-                            selectedPagesTab = 1
-                        },
+                        onClick = { selectedPagesTab = 1 },
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Text("+ Buat Baru")
@@ -366,6 +426,7 @@ fun PagesScreen() {
 
             items(items = projects, key = { it }) { pName ->
                 val snapshot = historyStorage.getSnapshot(pName)
+                val fullUrl = "https://$pName.pages.dev"
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -380,8 +441,17 @@ fun PagesScreen() {
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("📄 $pName", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                Text("🔗 https://$pName.pages.dev", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Text(
+                                    text = "🔗 $fullUrl ↗",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.clickable { openBrowser(fullUrl) }
+                                )
                                 if (snapshot != null) {
+                                    Spacer(modifier = Modifier.height(2.dp))
                                     Text("💾 Deploy: ${snapshot.deployedAt} (Compat: ${snapshot.compatDate})", style = MaterialTheme.typography.labelSmall, color = Color(0xFF16A34A))
                                 }
                             }
@@ -389,16 +459,14 @@ fun PagesScreen() {
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // TOMBOL AKSI LENGKAP: 🚀 DEPLOY, 📥 TARIK TERAKHIR, 🌐 KELOLA DOMAIN, 🗑 HAPUS
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            // TOMBOL 1: DEPLOY LANGSUNG (LARI KE TAB 1)
                             Button(
                                 onClick = {
                                     pullLatestDeployment(pName)
-                                    selectedPagesTab = 1
+                                    selectedPagesTab = 2
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
                                 modifier = Modifier.weight(1.1f),
@@ -407,11 +475,10 @@ fun PagesScreen() {
                                 Text("🚀 Deploy")
                             }
 
-                            // TOMBOL 2: TARIK TERAKHIR
                             OutlinedButton(
                                 onClick = {
                                     pullLatestDeployment(pName)
-                                    selectedPagesTab = 1
+                                    selectedPagesTab = 2
                                 },
                                 modifier = Modifier.weight(1.3f),
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp)
@@ -419,7 +486,6 @@ fun PagesScreen() {
                                 Text("📥 Tarik Terakhir")
                             }
 
-                            // TOMBOL 3: KELOLA DOMAIN
                             Button(
                                 onClick = {
                                     activeProjectForDomain = pName
@@ -434,7 +500,6 @@ fun PagesScreen() {
                                 Text("🌐 Domain")
                             }
 
-                            // TOMBOL 4: HAPUS
                             IconButton(
                                 onClick = {
                                     projectToDelete = pName
@@ -450,8 +515,142 @@ fun PagesScreen() {
             }
         }
 
-        // ==================== SUB-TAB 1: STUDIO BUAT / DEPLOY ====================
+        // ==================== SUB-TAB 1: KHUSUS BUAT PROJECT BARU (DOH 1.1.1.1 PERSIS SC WEB) ====================
         if (selectedPagesTab == 1) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text("➕ Buat Project Pages Baru", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("Periksa ketersediaan nama subdomain via DoH Cloudflare 1.1.1.1 sebelum membuat project", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = newCreateProjectName,
+                                onValueChange = {
+                                    newCreateProjectName = it.lowercase().trim()
+                                    subdomainCheckMsg = ""
+                                    isSubdomainAvailable = null
+                                },
+                                label = { Text("Nama Subdomain Project") },
+                                placeholder = { Text("contoh: namaku-web") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Button(
+                                onClick = { checkSubdomainWithDoh(newCreateProjectName) },
+                                enabled = !isCheckingSubdomain && newCreateProjectName.isNotBlank(),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Text(if (isCheckingSubdomain) "..." else "🔍 Cek Unik")
+                            }
+                        }
+
+                        if (subdomainCheckMsg.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            val resultColor = when (isSubdomainAvailable) {
+                                true -> Color(0xFF16A34A)
+                                false -> Color(0xFFDC2626)
+                                else -> MaterialTheme.colorScheme.primary
+                            }
+                            Text(
+                                text = subdomainCheckMsg,
+                                color = resultColor,
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = newCreateCompatDate,
+                                onValueChange = { newCreateCompatDate = it.trim() },
+                                label = { Text("Compatibility Date") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = newCreateEnableNodeCompat,
+                                    onCheckedChange = { newCreateEnableNodeCompat = it }
+                                )
+                                Text("nodejs_compat", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Button(
+                            onClick = {
+                                val target = newCreateProjectName.trim().lowercase()
+                                if (target.isBlank()) {
+                                    statusMsg = "Nama project tidak boleh kosong!"
+                                    return@Button
+                                }
+                                scope.launch {
+                                    isCreatingNewProject = true
+                                    statusMsg = "Mendaftarkan project '$target' di Cloudflare Pages..."
+                                    try {
+                                        val accId = CfAccountHelper.ensureAccountId()
+                                        val flagsList = if (newCreateEnableNodeCompat) listOf("nodejs_compat") else emptyList()
+                                        val payload = mapOf(
+                                            "name" to target,
+                                            "production_branch" to "main",
+                                            "deployment_configs" to mapOf(
+                                                "production" to mapOf(
+                                                    "compatibility_date" to newCreateCompatDate,
+                                                    "compatibility_flags" to flagsList
+                                                )
+                                            )
+                                        )
+                                        val res = ApiClient.api.createPagesProject(accId, payload)
+                                        if (res.isSuccessful && res.body()?.success == true) {
+                                            statusMsg = "🎉 Project Pages '$target.pages.dev' berhasil dibuat!"
+                                            targetProjectName = target
+                                            deployCompatDate = newCreateCompatDate
+                                            deployEnableNodeCompat = newCreateEnableNodeCompat
+                                            loadProjects()
+                                            selectedPagesTab = 2
+                                        } else {
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                            statusMsg = "Gagal membuat project: $err"
+                                        }
+                                    } catch (e: Exception) {
+                                        statusMsg = "Error: ${e.message}"
+                                    } finally {
+                                        isCreatingNewProject = false
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A)),
+                            enabled = !isCreatingNewProject && newCreateProjectName.isNotBlank()
+                        ) {
+                            Text(if (isCreatingNewProject) "Membuat Project..." else "✅ Buat Project & Masuk ke Deploy Studio")
+                        }
+                    }
+                }
+            }
+        }
+
+        // ==================== SUB-TAB 2: DEPLOY STUDIO (DENGAN TOMBOL TARIK TERAKHIR) ====================
+        if (selectedPagesTab == 2) {
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -466,11 +665,11 @@ fun PagesScreen() {
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = if (newProjectName.isNotBlank()) "🚀 Deploy: $newProjectName" else "🚀 Studio Editor Pages",
+                                    text = if (targetProjectName.isNotBlank()) "🚀 Deploy: $targetProjectName" else "🚀 Studio Deploy Pages",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold
                                 )
-                                Text("Konfigurasi Runtime & Deploy ke Pages", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                                Text("Kelola kode index.html & _worker.js", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                             }
                             Button(
                                 onClick = {
@@ -489,15 +688,15 @@ fun PagesScreen() {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(80.dp)
+                                .height(76.dp)
                                 .clip(RoundedCornerShape(10.dp))
                                 .border(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
                                 .clickable { folderPickerLauncher.launch(null) }
-                                .padding(12.dp),
+                                .padding(10.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("📂 Ketuk untuk Impor Folder Web", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                Text("📂 Ketuk untuk Impor Folder Web Utuh", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                                 Text("Membaca index.html & _worker.js sekaligus", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                             }
                         }
@@ -509,49 +708,47 @@ fun PagesScreen() {
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // NAMA PROJECT & TOMBOL TARIK DEPLOY TERAKHIR DI MENU DEPLOY
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             OutlinedTextField(
-                                value = newProjectName,
-                                onValueChange = { newProjectName = it.lowercase().trim() },
-                                label = { Text("Nama Project (.pages.dev)") },
-                                placeholder = { Text("contoh: webku") },
+                                value = targetProjectName,
+                                onValueChange = { targetProjectName = it.lowercase().trim() },
+                                label = { Text("Project Target (.pages.dev)") },
+                                placeholder = { Text("nama-project") },
                                 singleLine = true,
                                 modifier = Modifier.weight(1f)
                             )
                             Button(
-                                onClick = { pullLatestDeployment(newProjectName) },
-                                enabled = !isPullingDeploy && newProjectName.isNotBlank(),
+                                onClick = { pullLatestDeployment(targetProjectName) },
+                                enabled = !isPullingLatest && targetProjectName.isNotBlank(),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF475569)),
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
                             ) {
-                                Text(if (isPullingDeploy) "..." else "📥 Tarik Terakhir")
+                                Text(if (isPullingLatest) "..." else "📥 Tarik Terakhir")
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
 
-                        // RUNTIME DATE & NODEJS_COMPAT
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             OutlinedTextField(
-                                value = pagesCompatDate,
-                                onValueChange = { pagesCompatDate = it.trim() },
-                                label = { Text("Runtime Date (YYYY-MM-DD)") },
+                                value = deployCompatDate,
+                                onValueChange = { deployCompatDate = it.trim() },
+                                label = { Text("Runtime Date") },
                                 singleLine = true,
                                 modifier = Modifier.weight(1f)
                             )
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Checkbox(
-                                    checked = pagesEnableNodeCompat,
-                                    onCheckedChange = { pagesEnableNodeCompat = it }
+                                    checked = deployEnableNodeCompat,
+                                    onCheckedChange = { deployEnableNodeCompat = it }
                                 )
                                 Text("nodejs_compat", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                             }
@@ -565,8 +762,8 @@ fun PagesScreen() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             OutlinedTextField(
-                                value = newRawUrl,
-                                onValueChange = { newRawUrl = it.trim() },
+                                value = workerRawUrl,
+                                onValueChange = { workerRawUrl = it.trim() },
                                 label = { Text("URL Raw Script / HTML") },
                                 placeholder = { Text("https://raw.github.../code") },
                                 singleLine = true,
@@ -574,31 +771,31 @@ fun PagesScreen() {
                             )
                             Button(
                                 onClick = {
-                                    if (newRawUrl.isBlank()) return@Button
+                                    if (workerRawUrl.isBlank()) return@Button
                                     scope.launch {
-                                        isFetchingNewRaw = true
+                                        isFetchingRaw = true
                                         try {
-                                            val fetched = withContext(Dispatchers.IO) { URL(newRawUrl).readText() }
+                                            val fetched = withContext(Dispatchers.IO) { URL(workerRawUrl).readText() }
                                             if (rawTargetTab == 0) {
                                                 htmlContent = fetched
                                                 editorCodeTab = 0
-                                                statusMsg = "✅ Berhasil menarik kode ke index.html!"
+                                                statusMsg = "✅ Berhasil memuat kode ke index.html!"
                                             } else {
                                                 workerScript = fetched
                                                 detectedBindings = SmartWranglerParser.parseScriptBindings(fetched)
                                                 editorCodeTab = 1
-                                                statusMsg = "✅ Berhasil menarik kode ke _worker.js!"
+                                                statusMsg = "✅ Berhasil memuat kode ke _worker.js!"
                                             }
                                         } catch (e: Exception) {
                                             statusMsg = "Gagal fetch RAW: ${e.message}"
                                         } finally {
-                                            isFetchingNewRaw = false
+                                            isFetchingRaw = false
                                         }
                                     }
                                 },
-                                enabled = !isFetchingNewRaw && newRawUrl.isNotBlank()
+                                enabled = !isFetchingRaw && workerRawUrl.isNotBlank()
                             ) {
-                                Text(if (isFetchingNewRaw) "..." else "Tarik")
+                                Text(if (isFetchingRaw) "..." else "Tarik")
                             }
                         }
 
@@ -613,11 +810,11 @@ fun PagesScreen() {
                             Text("_worker.js", style = MaterialTheme.typography.bodySmall)
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         HorizontalDivider()
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        SecondaryTabRow(editorCodeTab) {
+                        SecondaryTabRow(selectedTabIndex = editorCodeTab) {
                             Tab(selected = editorCodeTab == 0, onClick = { editorCodeTab = 0 }, text = { Text("📄 index.html", fontWeight = FontWeight.Bold) })
                             Tab(selected = editorCodeTab == 1, onClick = { editorCodeTab = 1 }, text = { Text("⚡ _worker.js", fontWeight = FontWeight.Bold) })
                         }
@@ -661,24 +858,24 @@ fun PagesScreen() {
 
                         Button(
                             onClick = {
-                                val target = newProjectName.trim().lowercase()
+                                val target = targetProjectName.trim().lowercase()
                                 if (target.isBlank()) {
                                     statusMsg = "Nama project tidak boleh kosong!"
                                     return@Button
                                 }
                                 scope.launch {
-                                    isDeployingNew = true
-                                    statusMsg = "Mendaftarkan project Pages '$target' di Cloudflare..."
+                                    isDeploying = true
+                                    statusMsg = "Mendeploy aset Pages ke '$target'..."
                                     try {
                                         val accId = CfAccountHelper.ensureAccountId()
-                                        val flagsList = if (pagesEnableNodeCompat) listOf("nodejs_compat") else emptyList()
+                                        val flagsList = if (deployEnableNodeCompat) listOf("nodejs_compat") else emptyList()
 
                                         val payload = mapOf(
                                             "name" to target,
                                             "production_branch" to "main",
                                             "deployment_configs" to mapOf(
                                                 "production" to mapOf(
-                                                    "compatibility_date" to pagesCompatDate,
+                                                    "compatibility_date" to deployCompatDate,
                                                     "compatibility_flags" to flagsList
                                                 )
                                             )
@@ -691,37 +888,37 @@ fun PagesScreen() {
                                                     projectName = target,
                                                     htmlContent = htmlContent,
                                                     workerScript = workerScript,
-                                                    compatDate = pagesCompatDate,
-                                                    enableNodeCompat = pagesEnableNodeCompat
+                                                    compatDate = deployCompatDate,
+                                                    enableNodeCompat = deployEnableNodeCompat
                                                 )
                                             )
-                                            statusMsg = "🎉 Pages '$target' berhasil dideploy dengan Runtime $pagesCompatDate!"
+                                            statusMsg = "🎉 Pages '$target' berhasil dideploy!"
                                             selectedPagesTab = 0
                                             loadProjects()
                                         } else {
                                             val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
-                                            statusMsg = "Gagal: $err"
+                                            statusMsg = "Gagal deploy: $err"
                                         }
                                     } catch (e: Exception) {
                                         statusMsg = "Error: ${e.message}"
                                     } finally {
-                                        isDeployingNew = false
+                                        isDeploying = false
                                     }
                                 }
                             },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
-                            enabled = !isDeployingNew && newProjectName.isNotBlank()
+                            enabled = !isDeploying && targetProjectName.isNotBlank()
                         ) {
-                            Text(if (isDeployingNew) "Deploying ke Pages..." else "🚀 Simpan Snapshot & Deploy Pages")
+                            Text(if (isDeploying) "Deploying..." else "🚀 Simpan Snapshot & Deploy Pages")
                         }
                     }
                 }
             }
         }
 
-        // ==================== SUB-TAB 2: BULK MULTI-AKUN ====================
-        if (selectedPagesTab == 2) {
+        // ==================== SUB-TAB 3: BULK MULTI-AKUN ====================
+        if (selectedPagesTab == 3) {
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -828,7 +1025,7 @@ fun PagesScreen() {
                                                 if (res.isSuccessful && res.body()?.success == true) {
                                                     bulkLogs = bulkLogs + (logPrefix + "✅ Sukses (https://$pName.pages.dev)")
                                                 } else {
-                                                    val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                                    val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
                                                     bulkLogs = bulkLogs + (logPrefix + "⚠️ Gagal: $err")
                                                 }
                                             } catch (e: Exception) {
