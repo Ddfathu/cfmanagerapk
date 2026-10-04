@@ -39,27 +39,37 @@ jobs:
             curl -sLo gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.5.0/gradle/wrapper/gradle-wrapper.jar || true
           fi
 
-      # 5. Compile APK Release
+      # 5. Compile APK Release Unsigned
       - name: Build Release APK
         run: ./gradlew assembleRelease --stacktrace --no-daemon
 
-      # 6. Auto Sign APK Pake Keystore Permanen
-      - name: Sign APK Automatically
-        uses: r0adkll/sign-android-release@v1
-        id: sign_app
-        with:
-          releaseDirectory: app/build/outputs/apk/release
-          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
-          alias: my-alias
-          keyStorePassword: '123456'
-          keyPassword: '123456'
-          buildToolsVersion: '34.0.0' # Fix lokasi zipalign biar gak nyari versi 29.0.3 lagi
+      # 6. Sign & Zipalign Pake SDK Bawaan Runner (Otomatis deteksi versi build-tools aktif)
+      - name: Sign & Zipalign APK
+        run: |
+          # 1. Decode keystore dari Secret GitHub ke file release.jks
+          echo "${{ secrets.SIGNING_KEY }}" | base64 -d > release.jks
+          
+          # 2. Cari folder build-tools terbaru di runner
+          BUILD_TOOLS_DIR=$(ls -d ${ANDROID_HOME}/build-tools/* | tail -n 1)
+          echo "Menggunakan Build Tools dari: $BUILD_TOOLS_DIR"
+          
+          # 3. Cari lokasi APK hasil build
+          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          
+          # 4. Align APK
+          $BUILD_TOOLS_DIR/zipalign -v -p 4 "$APK_PATH" app-release-aligned.apk
+          
+          # 5. Sign APK pake apksigner bawaan Android SDK
+          $BUILD_TOOLS_DIR/apksigner sign --ks release.jks --ks-pass pass:123456 --key-pass pass:123456 --out cfmanager-signed.apk app-release-aligned.apk
+          
+          # 6. Hapus file temporary
+          rm -f release.jks app-release-aligned.apk
 
       # 7. Upload Hasil APK Release Ter-sign
       - name: Upload Artifact APK
         uses: actions/upload-artifact@v4
         with:
           name: CF-Manager-Release-APK
-          path: ${{ steps.sign_app.outputs.signedReleaseFile }}
+          path: cfmanager-signed.apk
           if-no-files-found: error
           retention-days: 14
