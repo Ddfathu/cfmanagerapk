@@ -1,6 +1,8 @@
 package com.cf.manager.data.api
 
 import com.cf.manager.data.AppConfig
+import com.cf.manager.data.model.DnsRecordItem
+import com.cf.manager.data.model.ZoneItem
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import okhttp3.Interceptor
@@ -15,11 +17,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.*
 import java.util.concurrent.TimeUnit
 
-// ==================== 1. DATA CLASS PENDUKUNG ====================
-data class CfError(
-    val code: Int?,
-    val message: String?
-)
+data class CfError(val code: Int?, val message: String?)
 
 data class CfStandardResponse(
     val success: Boolean,
@@ -28,10 +26,10 @@ data class CfStandardResponse(
     val result: JsonElement?
 )
 
-data class CfListResponse(
+data class CfListResponse<T>(
     val success: Boolean,
     val errors: List<CfError>?,
-    val result: List<JsonObject>?
+    val result: List<T>?
 )
 
 data class CfBindingListResponse(
@@ -40,10 +38,9 @@ data class CfBindingListResponse(
     val result: List<JsonObject>?
 )
 
-// ==================== 2. INTERFACE WORKER API ====================
 interface WorkerApi {
     @GET("accounts/{accountId}/workers/services")
-    suspend fun listWorkers(@Path("accountId") accountId: String): Response<CfListResponse>
+    suspend fun listWorkers(@Path("accountId") accountId: String): Response<CfListResponse<JsonObject>>
 
     @GET("accounts/{accountId}/workers/services/{scriptName}/environments/production/content")
     suspend fun getWorkerCode(
@@ -61,7 +58,7 @@ interface WorkerApi {
     ): Response<CfStandardResponse>
 
     @GET("accounts/{accountId}/workers/domains")
-    suspend fun listWorkerDomains(@Path("accountId") accountId: String): Response<CfListResponse>
+    suspend fun listWorkerDomains(@Path("accountId") accountId: String): Response<CfListResponse<JsonObject>>
 
     @PUT("accounts/{accountId}/workers/domains")
     suspend fun putWorkerDomain(
@@ -106,12 +103,21 @@ interface WorkerApi {
         @Part settings: MultipartBody.Part
     ): Response<CfStandardResponse>
 
-    // --- ZONES & DNS ---
+    @GET("memberships")
+    suspend fun listMemberships(): Response<CfListResponse<JsonObject>>
+
+    // --- ZONES & DNS (Dikembalikan ke Tipe Model Spesifik UI) ---
     @GET("zones")
-    suspend fun listZones(@Query("account.id") accountId: String? = null): Response<CfListResponse>
+    suspend fun listZones(@Query("account.id") accountId: String? = null): Response<CfListResponse<ZoneItem>>
+
+    @POST("zones")
+    suspend fun createZone(@Body body: Map<String, Any>): Response<CfStandardResponse>
+
+    @DELETE("zones/{zoneId}")
+    suspend fun deleteZone(@Path("zoneId") zoneId: String): Response<CfStandardResponse>
 
     @GET("zones/{zoneId}/dns_records")
-    suspend fun listDns(@Path("zoneId") zoneId: String, @Query("per_page") perPage: Int = 100): Response<CfListResponse>
+    suspend fun listDns(@Path("zoneId") zoneId: String, @Query("per_page") perPage: Int = 100): Response<CfListResponse<DnsRecordItem>>
 
     @POST("zones/{zoneId}/dns_records")
     suspend fun createDns(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
@@ -124,7 +130,7 @@ interface WorkerApi {
 
     // --- TUNNELS ---
     @GET("accounts/{accountId}/cfd_tunnel")
-    suspend fun listTunnels(@Path("accountId") accountId: String, @Query("is_deleted") isDeleted: Boolean = false): Response<CfListResponse>
+    suspend fun listTunnels(@Path("accountId") accountId: String, @Query("is_deleted") isDeleted: Boolean = false): Response<CfListResponse<JsonObject>>
 
     @POST("accounts/{accountId}/cfd_tunnel")
     suspend fun createTunnel(@Path("accountId") accountId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
@@ -152,7 +158,6 @@ interface WorkerApi {
     suspend fun deleteR2Bucket(@Path("accountId") accountId: String, @Path("bucketName") bucketName: String): Response<CfStandardResponse>
 }
 
-// ==================== 3. OBJECT API CLIENT ====================
 object ApiClient {
     const val CLOUDFLARE_BASE_URL = "https://api.cloudflare.com/client/v4/"
 

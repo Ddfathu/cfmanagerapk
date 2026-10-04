@@ -10,15 +10,17 @@ object CfAccountHelper {
     suspend fun ensureAccountId(): String {
         cachedAccountId?.let { return it }
         return try {
-            val res = ApiClient.api.listAccounts()
+            val res = ApiClient.api.listMemberships()
             if (res.isSuccessful && res.body()?.success == true) {
-                val acc = res.body()?.result?.firstOrNull()
-                val id = acc?.id ?: ""
-                if (id.isNotBlank()) cachedAccountId = id
-                id
-            } else {
-                ""
+                val firstMember = res.body()?.result?.firstOrNull()?.asJsonObject
+                val accObj = firstMember?.getAsJsonObject("account")
+                val accId = accObj?.get("id")?.asString ?: ""
+                if (accId.isNotBlank()) {
+                    cachedAccountId = accId
+                    return accId
+                }
             }
+            ""
         } catch (_: Exception) {
             ""
         }
