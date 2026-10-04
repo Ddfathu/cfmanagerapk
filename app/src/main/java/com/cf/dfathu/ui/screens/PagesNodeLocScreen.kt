@@ -47,7 +47,7 @@ import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-// --- HELPER SAFE GSON EXTENSIONS (HARUS DI ATAS) ---
+// --- HELPER SAFE GSON EXTENSIONS ---
 fun JsonObject.getObj(key: String): JsonObject? =
     if (this.has(key) && !this.get(key).isJsonNull && this.get(key).isJsonObject) this.getAsJsonObject(key) else null
 
@@ -617,7 +617,6 @@ fun PagesNodeLocScreen() {
                                 Text("🚀 Deploy", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                             }
 
-                            // SAFE PARSING CONFIG (KODE PERBAIKAN FIXED HARMONIS)
                             OutlinedButton(
                                 onClick = {
                                     targetConfigProject = p.name
@@ -1444,10 +1443,25 @@ fun PagesNodeLocScreen() {
         )
     }
 
+    // --- POP-UP MODAL: CUSTOM DOMAIN MANAGER (DENGAN REFRESH & HAPUS DOMAIN) ---
     if (showDomainModal) {
         AlertDialog(
             onDismissRequest = { showDomainModal = false },
-            title = { Text("🌐 Custom Domain: $targetDomainProject", fontWeight = FontWeight.Bold) },
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("🌐 Custom Domain: $targetDomainProject", fontWeight = FontWeight.Bold)
+                    IconButton(
+                        onClick = { loadPagesDomains(targetDomainProject) },
+                        enabled = !isProcessing
+                    ) {
+                        Text("🔄")
+                    }
+                }
+            },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1492,14 +1506,57 @@ fun PagesNodeLocScreen() {
                         Text(domainSyncLog, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = Color(0xFF16A34A))
                     }
 
-                    Text("Domain Terpasang:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                    LazyColumn(modifier = Modifier.fillMaxWidth().height(100.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Domain Terpasang (${pagesDomainList.size}):", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                    }
+
+                    LazyColumn(modifier = Modifier.fillMaxWidth().height(140.dp)) {
                         items(pagesDomainList) { dObj ->
                             val dName = dObj.getStr("name")
                             val dStatus = dObj.getStr("status").ifBlank { "pending" }
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text(dName, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
-                                Text(dStatus, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(dName, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                    Text(dStatus, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        scope.launch {
+                                            try {
+                                                val accId = CfAccountHelper.ensureAccountId()
+                                                val req = Request.Builder()
+                                                    .url("https://api.cloudflare.com/client/v4/accounts/$accId/pages/projects/$targetDomainProject/domains/$dName")
+                                                    .header("X-Auth-Email", email)
+                                                    .header("X-Auth-Key", apiKey)
+                                                    .delete()
+                                                    .build()
+
+                                                val resp = withContext(Dispatchers.IO) { httpClient.newCall(req).execute() }
+                                                if (resp.isSuccessful) {
+                                                    Toast.makeText(context, "🗑 Domain $dName dicopot!", Toast.LENGTH_SHORT).show()
+                                                    loadPagesDomains(targetDomainProject)
+                                                } else {
+                                                    Toast.makeText(context, "❌ Gagal mencopot domain", Toast.LENGTH_SHORT).show()
+                                                }
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Text("🗑", style = MaterialTheme.typography.labelMedium)
+                                }
                             }
                         }
                     }
