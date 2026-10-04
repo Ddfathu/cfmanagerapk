@@ -24,8 +24,14 @@ import com.cf.manager.data.api.ApiClient
 import com.cf.manager.data.api.CfAccountHelper
 import com.cf.manager.data.local.AccountStorage
 import com.cf.manager.data.model.ZoneItem
-import com.google.gson.JsonObject
 import kotlinx.coroutines.launch
+
+data class ZoneUiModel(
+    val id: String,
+    val name: String,
+    val status: String,
+    val nameServers: List<String> = emptyList()
+)
 
 data class CustomWorkerDomainUi(val id: String, val hostname: String, val service: String)
 
@@ -44,19 +50,19 @@ fun DomainScreen() {
     val tabTitles = listOf("🌐 Domain Utama (Zones)", "⚡ Rute Domain Worker", "⚙️ Subdomain Akun")
 
     // State Zones
-    var zones by remember { mutableStateOf<List<ZoneItem>>(emptyList()) }
+    var zones by remember { mutableStateOf<List<ZoneUiModel>>(emptyList()) }
     var isLoadingZones by remember { mutableStateOf(false) }
     var newDomainInput by remember { mutableStateOf("") }
     var isAddingDomain by remember { mutableStateOf(false) }
     var newlyAssignedNameservers by remember { mutableStateOf<List<String>>(emptyList()) }
     var showDeleteZoneDialog by remember { mutableStateOf(false) }
-    var zoneToDelete by remember { mutableStateOf<ZoneItem?>(null) }
+    var zoneToDelete by remember { mutableStateOf<ZoneUiModel?>(null) }
 
     // State Worker Domains (Rute ke Worker)
     var workers by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedWorkerForRoute by remember { mutableStateOf("") }
     var workerRouteDropdownExpanded by remember { mutableStateOf(false) }
-    var selectedMainZoneForRoute by remember { mutableStateOf<ZoneItem?>(null) }
+    var selectedMainZoneForRoute by remember { mutableStateOf<ZoneUiModel?>(null) }
     var mainZoneDropdownExpanded by remember { mutableStateOf(false) }
     var routeSubdomainInput by remember { mutableStateOf("") }
     var customDomainsList by remember { mutableStateOf<List<CustomWorkerDomainUi>>(emptyList()) }
@@ -78,7 +84,6 @@ fun DomainScreen() {
         statusMsg = "📋 " + label + " disalin: " + text
     }
 
-    // Bersihkan format domain agar tidak terkena HTTP 400
     fun cleanApexDomain(raw: String): String {
         var clean = raw.trim().lowercase()
         clean = clean.removePrefix("http://").removePrefix("https://")
@@ -99,10 +104,18 @@ fun DomainScreen() {
             try {
                 val res = ApiClient.api.listZones()
                 if (res.isSuccessful && res.body()?.success == true) {
-                    val list = res.body()?.result ?: emptyList()
-                    zones = list
-                    if (selectedMainZoneForRoute == null && list.isNotEmpty()) {
-                        selectedMainZoneForRoute = list[0]
+                    val rawList = res.body()?.result ?: emptyList()
+                    val parsed = rawList.map { z ->
+                        ZoneUiModel(
+                            id = z.id,
+                            name = z.name,
+                            status = z.status,
+                            nameServers = emptyList()
+                        )
+                    }
+                    zones = parsed
+                    if (selectedMainZoneForRoute == null && parsed.isNotEmpty()) {
+                        selectedMainZoneForRoute = parsed[0]
                     }
                 } else {
                     val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
@@ -122,7 +135,6 @@ fun DomainScreen() {
             try {
                 val accId = CfAccountHelper.ensureAccountId()
                 
-                // Load Worker List
                 val wRes = ApiClient.api.listWorkers(accId)
                 if (wRes.isSuccessful && wRes.body()?.success == true) {
                     val wList = wRes.body()?.result?.mapNotNull { it.get("id")?.asString } ?: emptyList()
@@ -132,7 +144,6 @@ fun DomainScreen() {
                     }
                 }
 
-                // Load Custom Domains
                 val dRes = ApiClient.api.listWorkerDomains(accId)
                 if (dRes.isSuccessful && dRes.body()?.success == true) {
                     val raw = dRes.body()?.result ?: emptyList()
@@ -179,7 +190,6 @@ fun DomainScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // HEADER
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -288,7 +298,6 @@ fun DomainScreen() {
                 }
             }
 
-            // KOTAK PERINGATAN NAMESERVER DARI HASIL ADD ZONE
             if (newlyAssignedNameservers.isNotEmpty()) {
                 item {
                     Card(
@@ -358,12 +367,11 @@ fun DomainScreen() {
 
                         Spacer(modifier = Modifier.height(6.dp))
 
-                        // TAMPILKAN NAMESERVERS RESMI DOMAIN DARI CLOUDFLARE
-                        if (!z.name_servers.isNullOrEmpty()) {
+                        if (z.nameServers.isNotEmpty()) {
                             Text("Nameservers Cloudflare:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                             Spacer(modifier = Modifier.height(2.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                z.name_servers.forEach { ns ->
+                                for (ns in z.nameServers) {
                                     Surface(
                                         shape = RoundedCornerShape(4.dp),
                                         color = MaterialTheme.colorScheme.surface,
@@ -424,7 +432,6 @@ fun DomainScreen() {
                         Text("Buat rute domain atau subdomain khusus langsung ke script worker", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // 1. Pilih Worker Target
                         ExposedDropdownMenuBox(
                             expanded = workerRouteDropdownExpanded,
                             onExpandedChange = { workerRouteDropdownExpanded = !workerRouteDropdownExpanded }
@@ -455,7 +462,6 @@ fun DomainScreen() {
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // 2. Pilih Domain Utama (Zone)
                         ExposedDropdownMenuBox(
                             expanded = mainZoneDropdownExpanded,
                             onExpandedChange = { mainZoneDropdownExpanded = !mainZoneDropdownExpanded }
@@ -486,7 +492,6 @@ fun DomainScreen() {
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // 3. Subdomain (Opsional)
                         OutlinedTextField(
                             value = routeSubdomainInput,
                             onValueChange = { routeSubdomainInput = it.lowercase().trim() },
@@ -677,7 +682,6 @@ fun DomainScreen() {
         }
     }
 
-    // DIALOG KONFIRMASI HAPUS ZONE
     if (showDeleteZoneDialog && zoneToDelete != null) {
         val target = zoneToDelete!!
         AlertDialog(
