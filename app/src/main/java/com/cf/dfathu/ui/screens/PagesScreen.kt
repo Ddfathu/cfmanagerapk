@@ -56,7 +56,6 @@ data class PagesCustomDomainItem(
     val sslStatus: String? = null
 )
 
-// Helper Hashing MD5 buat mencocokkan hash dengan backend Cloudflare Pages
 fun getMd5Hash(input: ByteArray): String {
     val md = MessageDigest.getInstance("MD5")
     val digest = md.digest(input)
@@ -93,7 +92,7 @@ fun PagesScreen() {
 
     // --- TAB 2: DEPLOY STUDIO ---
     var targetProjectName by remember { mutableStateOf("") }
-    var isProjectDropdownExpanded by remember { mutableStateOf(false) } // State Dropdown Target Project
+    var isProjectDropdownExpanded by remember { mutableStateOf(false) }
     var deployCompatDate by remember { mutableStateOf("2024-01-01") }
     var deployEnableNodeCompat by remember { mutableStateOf(true) }
     var selectedFolderInfo by remember { mutableStateOf("") }
@@ -130,6 +129,37 @@ fun PagesScreen() {
 
     val scope = rememberCoroutineScope()
     val gson = remember { Gson() }
+
+    // --- DEKLARASI LOADPROJECTS DITAROH DI SINI BIAR KEBACA DI MANA AJA ---
+    fun loadProjects() {
+        if (email.isBlank() || apiKey.isBlank()) {
+            statusMsg = "⚠ Isi Email & API Key di tab Akun terlebih dahulu!"
+            return
+        }
+        scope.launch {
+            isLoadingProjects = true
+            try {
+                val accId = CfAccountHelper.ensureAccountId()
+                val res = ApiClient.api.listPagesProjects(accId)
+                if (res.isSuccessful && res.body()?.success == true) {
+                    val resultList = res.body()?.result ?: emptyList()
+                    val list = mutableListOf<String>()
+                    resultList.forEach {
+                        val name = it.get("name")?.asString
+                        if (!name.isNullOrBlank()) list.add(name)
+                    }
+                    projects = list
+                } else {
+                    val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                    statusMsg = "Gagal memuat project: $err"
+                }
+            } catch (e: Exception) {
+                statusMsg = "Error: ${e.message}"
+            } finally {
+                isLoadingProjects = false
+            }
+        }
+    }
 
     fun openBrowser(urlStr: String) {
         try {
@@ -254,7 +284,6 @@ fun PagesScreen() {
         }
     }
 
-    // --- LOGIKA DIRECT UPLOADER SAMA PERSIS SEPERTI BACKEND SCRIPT 2 ---
     fun executeDirectUploadDeploy(projectName: String) {
         if (email.isBlank() || apiKey.isBlank()) {
             statusMsg = "⚠️ Email & API Key belum dikonfigurasi!"
@@ -271,7 +300,6 @@ fun PagesScreen() {
                     return@launch
                 }
 
-                // 1. Inisialisasi Project (Buat / Buka)
                 val flagsList = if (deployEnableNodeCompat) listOf("nodejs_compat") else emptyList()
                 val createPayload = mapOf(
                     "name" to projectName,
@@ -297,7 +325,6 @@ fun PagesScreen() {
 
                 val client = OkHttpClient()
 
-                // 2. Minta JWT Upload Token dari Cloudflare
                 statusMsg = "🔑 Mengambil JWT Upload Token..."
                 val tokenReq = Request.Builder()
                     .url("https://api.cloudflare.com/client/v4/accounts/$accId/pages/projects/$projectName/upload-token")
@@ -322,7 +349,6 @@ fun PagesScreen() {
                     return@launch
                 }
 
-                // 3. Olah file HTML ke Manifest & Hashes
                 statusMsg = "📦 Memproses hash MD5 aset web..."
                 val manifest = JsonObject()
                 val hashesList = JsonArray()
@@ -340,7 +366,6 @@ fun PagesScreen() {
                     contentTypesMap[md5Hash] = "text/html; charset=utf-8"
                 }
 
-                // 4. Check Missing Hashes
                 if (hashesList.size() > 0) {
                     statusMsg = "🔍 Memeriksa missing hashes..."
                     val checkMissingBody = JsonObject().apply { add("hashes", hashesList) }
@@ -358,7 +383,6 @@ fun PagesScreen() {
                     
                     val missingHashes = checkJson.getAsJsonArray("result") ?: JsonArray()
 
-                    // 5. Upload File Aset yang Belum Ada
                     if (missingHashes.size() > 0) {
                         statusMsg = "📤 Mengunggah ${missingHashes.size()} aset baru..."
                         val uploadPayloadArr = JsonArray()
@@ -401,7 +425,6 @@ fun PagesScreen() {
                     }
                 }
 
-                // 6. Buat Final Deploy Request
                 statusMsg = "🚀 Mempublikasikan Pages..."
                 val multipartBuilder = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
@@ -535,36 +558,6 @@ fun PagesScreen() {
                 }
             } catch (e: Exception) {
                 statusMsg = "Gagal baca script: ${e.message}"
-            }
-        }
-    }
-
-    fun loadProjects() {
-        if (email.isBlank() || apiKey.isBlank()) {
-            statusMsg = "⚠ Isi Email & API Key di tab Akun terlebih dahulu!"
-            return
-        }
-        scope.launch {
-            isLoadingProjects = true
-            try {
-                val accId = CfAccountHelper.ensureAccountId()
-                val res = ApiClient.api.listPagesProjects(accId)
-                if (res.isSuccessful && res.body()?.success == true) {
-                    val resultList = res.body()?.result ?: emptyList()
-                    val list = mutableListOf<String>()
-                    resultList.forEach {
-                        val name = it.get("name")?.asString
-                        if (!name.isNullOrBlank()) list.add(name)
-                    }
-                    projects = list
-                } else {
-                    val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
-                    statusMsg = "Gagal memuat project: $err"
-                }
-            } catch (e: Exception) {
-                statusMsg = "Error: ${e.message}"
-            } finally {
-                isLoadingProjects = false
             }
         }
     }
