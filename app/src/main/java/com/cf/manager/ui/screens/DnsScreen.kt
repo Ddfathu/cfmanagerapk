@@ -135,7 +135,8 @@ fun DnsScreen() {
             ) {
                 Column {
                     Text("🌐 Kelola DNS Record", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("Domain: ${selectedZone?.name ?: "(Pilih Zone)"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    val zoneNameLabel = selectedZone?.name ?: "(Pilih Zone)"
+                    Text("Domain: " + zoneNameLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 }
                 IconButton(onClick = { selectedZone?.let { loadRecords(it.id) } }, enabled = !isLoadingList && selectedZone != null) {
                     Text(if (isLoadingList) "⏳" else "🔄")

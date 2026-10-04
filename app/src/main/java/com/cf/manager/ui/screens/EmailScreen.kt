@@ -180,7 +180,7 @@ fun EmailScreen() {
             ) {
                 Column {
                     Text("✉️ Email Routing (Direct)", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("Domain: ${selectedZone?.name ?: "(Pilih Zone)"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    val currentZoneLabel = selectedZone?.name ?: "(Pilih Zone)"\n                    Text("Domain: " + currentZoneLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 }
                 IconButton(onClick = { selectedZone?.let { loadZoneRules(it.id) }; loadDestinations() }, enabled = !isLoading) {
                     Text(if (isLoading) "⏳" else "🔄")
@@ -259,7 +259,7 @@ fun EmailScreen() {
                                 singleLine = true,
                                 modifier = Modifier.weight(1f)
                             )
-                            Text("@${selectedZone?.name ?: "domain.com"}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                            val domainSuffix = "@" + (selectedZone?.name ?: "domain.com")\n                            Text(domainSuffix, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
@@ -409,7 +409,7 @@ fun EmailScreen() {
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Text("📥 Catch-All Email", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Text("Teruskan SEMUA email apa saja yang dikirim ke domain @${selectedZone?.name ?: "domain.com"} tanpa perlu membuat alias satu-satu.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        val catchAllDomain = "@" + (selectedZone?.name ?: "domain.com")\n                        Text("Teruskan SEMUA email apa saja yang dikirim ke domain " + catchAllDomain + " tanpa perlu membuat alias satu-satu.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
 
                         Spacer(modifier = Modifier.height(14.dp))
 
