@@ -4,13 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -29,6 +27,7 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 
 data class R2BucketItem(val name: String, val creationDate: String = "")
+data class WorkerBindingUiItem(val name: String, val type: String, val target: String)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,16 +48,16 @@ fun R2Screen() {
     var selectedWorker by remember { mutableStateOf("") }
     var workerExpanded by remember { mutableStateOf(false) }
 
-    var currentRawBindings by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
+    var bindingList by remember { mutableStateOf<List<WorkerBindingUiItem>>(emptyList()) }
     var isLoadingBindings by remember { mutableStateOf(false) }
 
     // Form Tambah Bucket
     var newBucketName by remember { mutableStateOf("") }
     var isCreatingBucket by remember { mutableStateOf(false) }
 
-    // Form Tambah Binding (Atomic Multipart Pattern)
-    var bindingType by remember { mutableStateOf("r2_bucket") } // r2_bucket / kv_namespace
-    var bindingVarName by remember { mutableStateOf("MY_BUCKET") }
+    // Form Tambah Binding (Sesuai SC Web: R2 & KV)
+    var bindingType by remember { mutableStateOf("r2_bucket") } // "r2_bucket" atau "kv_namespace"
+    var bindingVarName by remember { mutableStateOf("MY_R2") }
     var selectedBucketForBind by remember { mutableStateOf("") }
     var bucketDropdownExpanded by remember { mutableStateOf(false) }
     var manualTargetId by remember { mutableStateOf("") }
@@ -95,28 +94,41 @@ fun R2Screen() {
                     }
                 }
             } catch (e: Exception) {
-                statusMsg = "Error: ${e.message}"
+                statusMsg = "Error load buckets: " + e.message
             } finally {
                 isLoading = false
             }
         }
     }
 
-    // Tarik daftar binding aktif dari Worker dengan parser objek aman
     fun loadBindings(workerName: String) {
-        if (workerName.isBlank()) return
+        if (workerName.isBlank() || email.isBlank() || apiKey.isBlank()) return
         scope.launch {
             isLoadingBindings = true
             try {
                 val accId = CfAccountHelper.ensureAccountId()
                 val res = ApiClient.api.getWorkerBindings(accId, workerName)
                 if (res.isSuccessful && res.body()?.success == true) {
-                    currentRawBindings = res.body()?.result ?: emptyList()
+                    val rawList = res.body()?.result ?: emptyList()
+                    val parsed = mutableListOf<WorkerBindingUiItem>()
+                    rawList.forEach { obj ->
+                        val type = obj.get("type")?.asString ?: ""
+                        val name = obj.get("name")?.asString ?: ""
+                        if (type == "r2_bucket") {
+                            val bucketName = obj.get("bucket_name")?.asString ?: ""
+                            parsed.add(WorkerBindingUiItem(name, "r2_bucket", bucketName))
+                        } else if (type == "kv_namespace") {
+                            val nsId = obj.get("namespace_id")?.asString ?: ""
+                            parsed.add(WorkerBindingUiItem(name, "kv_namespace", nsId))
+                        }
+                    }
+                    bindingList = parsed
                 } else {
-                    currentRawBindings = emptyList()
+                    bindingList = emptyList()
                 }
-            } catch (_: Exception) {
-                currentRawBindings = emptyList()
+            } catch (e: Exception) {
+                bindingList = emptyList()
+                statusMsg = "Gagal memuat binding: " + e.message
             } finally {
                 isLoadingBindings = false
             }
@@ -148,6 +160,12 @@ fun R2Screen() {
         }
     }
 
+    LaunchedEffect(selectedWorker, selectedTab) {
+        if (selectedTab == 1 && selectedWorker.isNotBlank()) {
+            loadBindings(selectedWorker)
+        }
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -161,11 +179,18 @@ fun R2Screen() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("🪣 Cloudflare R2 & Bindings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("Teknik Atomic Multipart (Sama persis Web Dashboard)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("💿 Cloudflare R2 & Bindings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Manajemen Bucket & Binding Worker (Persis SC Web)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                 }
-                IconButton(onClick = { loadBuckets(); loadWorkers() }, enabled = !isLoading) {
-                    Text(if (isLoading) "⏳" else "🔄")
+                IconButton(
+                    onClick = {
+                        loadBuckets()
+                        loadWorkers()
+                        if (selectedWorker.isNotBlank()) loadBindings(selectedWorker)
+                    },
+                    enabled = !isLoading && !isLoadingBindings
+                ) {
+                    Text(if (isLoading || isLoadingBindings) "⏳" else "🔄")
                 }
             }
 
@@ -211,21 +236,21 @@ fun R2Screen() {
                                     if (newBucketName.isBlank()) return@Button
                                     scope.launch {
                                         isCreatingBucket = true
-                                        statusMsg = "Membuat bucket '$newBucketName'..."
+                                        statusMsg = "Membuat bucket '" + newBucketName + "'..."
                                         try {
                                             val accId = CfAccountHelper.ensureAccountId()
                                             val payload = mapOf("name" to newBucketName)
                                             val res = ApiClient.api.createR2Bucket(accId, payload)
                                             if (res.isSuccessful && res.body()?.success == true) {
-                                                statusMsg = "✅ Bucket '$newBucketName' berhasil dibuat!"
+                                                statusMsg = "✅ Bucket '" + newBucketName + "' berhasil dibuat!"
                                                 newBucketName = ""
                                                 loadBuckets()
                                             } else {
-                                                val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                                                statusMsg = "Gagal: $err"
+                                                val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                                statusMsg = "Gagal: " + err
                                             }
                                         } catch (e: Exception) {
-                                            statusMsg = "Error: ${e.message}"
+                                            statusMsg = "Error: " + e.message
                                         } finally {
                                             isCreatingBucket = false
                                         }
@@ -241,7 +266,7 @@ fun R2Screen() {
             }
 
             item {
-                Text("Daftar Bucket R2 Aktif (${buckets.size}):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("Daftar Bucket R2 Aktif (" + buckets.size + "):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             }
 
             if (buckets.isEmpty() && !isLoading) {
@@ -262,7 +287,7 @@ fun R2Screen() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column {
-                            Text("🪣 ${b.name}", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            Text("💿 " + b.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                             if (b.creationDate.isNotBlank()) {
                                 Text(b.creationDate.take(10), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                             }
@@ -270,19 +295,19 @@ fun R2Screen() {
 
                         IconButton(onClick = {
                             scope.launch {
-                                statusMsg = "Menghapus bucket ${b.name}..."
+                                statusMsg = "Menghapus bucket " + b.name + "..."
                                 try {
                                     val accId = CfAccountHelper.ensureAccountId()
                                     val res = ApiClient.api.deleteR2Bucket(accId, b.name)
                                     if (res.isSuccessful && res.body()?.success == true) {
-                                        statusMsg = "🗑 Bucket '${b.name}' berhasil dihapus!"
+                                        statusMsg = "🗑 Bucket '" + b.name + "' berhasil dihapus!"
                                         loadBuckets()
                                     } else {
-                                        val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                                        statusMsg = "Gagal hapus: $err"
+                                        val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                        statusMsg = "Gagal hapus: " + err
                                     }
                                 } catch (e: Exception) {
-                                    statusMsg = "Error: ${e.message}"
+                                    statusMsg = "Error: " + e.message
                                 }
                             }
                         }) {
@@ -302,59 +327,63 @@ fun R2Screen() {
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
-                        Text("Target Worker:", style = MaterialTheme.typography.labelMedium)
+                        Text("Pilih Worker Target:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                         Spacer(modifier = Modifier.height(6.dp))
 
-                        if (workers.isNotEmpty()) {
-                            ExposedDropdownMenuBox(
+                        ExposedDropdownMenuBox(
+                            expanded = workerExpanded,
+                            onExpandedChange = { workerExpanded = !workerExpanded }
+                        ) {
+                            OutlinedTextField(
+                                value = selectedWorker.ifBlank { "Pilih Worker..." },
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Worker") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = workerExpanded) },
+                                modifier = Modifier.menuAnchor().fillMaxWidth()
+                            )
+                            ExposedDropdownMenu(
                                 expanded = workerExpanded,
-                                onExpandedChange = { workerExpanded = !workerExpanded }
+                                onDismissRequest = { workerExpanded = false }
                             ) {
-                                OutlinedTextField(
-                                    value = selectedWorker,
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    label = { Text("Pilih Worker Target") },
-                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = workerExpanded) },
-                                    modifier = Modifier.menuAnchor().fillMaxWidth()
-                                )
-                                ExposedDropdownMenu(
-                                    expanded = workerExpanded,
-                                    onDismissRequest = { workerExpanded = false }
-                                ) {
-                                    workers.forEach { w ->
-                                        DropdownMenuItem(
-                                            text = { Text(w) },
-                                            onClick = {
-                                                selectedWorker = w
-                                                workerExpanded = false
-                                                loadBindings(w)
-                                            }
-                                        )
-                                    }
+                                workers.forEach { w ->
+                                    DropdownMenuItem(
+                                        text = { Text("⚡ " + w) },
+                                        onClick = {
+                                            selectedWorker = w
+                                            workerExpanded = false
+                                            loadBindings(w)
+                                        }
+                                    )
                                 }
                             }
                         }
+                    }
+                }
+            }
 
-                        Spacer(modifier = Modifier.height(12.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(10.dp))
-
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
                         Text("➕ Tambah / Pasang Binding Baru", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(
                                 selected = (bindingType == "r2_bucket"),
-                                onClick = { bindingType = "r2_bucket"; bindingVarName = "MY_BUCKET" }
+                                onClick = { bindingType = "r2_bucket"; bindingVarName = "MY_R2" }
                             )
-                            Text("R2 Bucket", style = MaterialTheme.typography.bodySmall)
+                            Text("R2 Bucket (💿)", style = MaterialTheme.typography.bodySmall)
                             Spacer(modifier = Modifier.width(16.dp))
                             RadioButton(
                                 selected = (bindingType == "kv_namespace"),
                                 onClick = { bindingType = "kv_namespace"; bindingVarName = "MY_KV" }
                             )
-                            Text("KV Namespace", style = MaterialTheme.typography.bodySmall)
+                            Text("KV Namespace (📦)", style = MaterialTheme.typography.bodySmall)
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
@@ -362,7 +391,8 @@ fun R2Screen() {
                         OutlinedTextField(
                             value = bindingVarName,
                             onValueChange = { bindingVarName = it.trim() },
-                            label = { Text("Nama Variabel Binding (cth: MY_BUCKET / MY_KV)") },
+                            label = { Text("Nama Variabel Binding (env.NAMA_INI)") },
+                            placeholder = { Text("Contoh: MY_R2 atau DATA_STORE") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -376,10 +406,10 @@ fun R2Screen() {
                                     onExpandedChange = { bucketDropdownExpanded = !bucketDropdownExpanded }
                                 ) {
                                     OutlinedTextField(
-                                        value = selectedBucketForBind,
+                                        value = selectedBucketForBind.ifBlank { "Pilih Bucket R2..." },
                                         onValueChange = {},
                                         readOnly = true,
-                                        label = { Text("Pilih Target Bucket R2") },
+                                        label = { Text("Target Bucket R2") },
                                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = bucketDropdownExpanded) },
                                         modifier = Modifier.menuAnchor().fillMaxWidth()
                                     )
@@ -389,7 +419,7 @@ fun R2Screen() {
                                     ) {
                                         buckets.forEach { b ->
                                             DropdownMenuItem(
-                                                text = { Text(b.name) },
+                                                text = { Text("💿 " + b.name) },
                                                 onClick = {
                                                     selectedBucketForBind = b.name
                                                     bucketDropdownExpanded = false
@@ -399,13 +429,14 @@ fun R2Screen() {
                                     }
                                 }
                             } else {
-                                Text("⚠️ Buat bucket R2 terlebih dahulu di tab sebelah.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                Text("⚠️ Belum ada bucket R2. Buat bucket di tab sebelah dulu.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                             }
                         } else {
                             OutlinedTextField(
                                 value = manualTargetId,
                                 onValueChange = { manualTargetId = it.trim() },
                                 label = { Text("ID Namespace KV (32 Karakter Hex)") },
+                                placeholder = { Text("Contoh: 0f2b38c...") },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -415,7 +446,8 @@ fun R2Screen() {
 
                         Button(
                             onClick = {
-                                if (selectedWorker.isBlank()) {
+                                val w = selectedWorker
+                                if (w.isBlank()) {
                                     statusMsg = "Pilih worker target terlebih dahulu!"
                                     return@Button
                                 }
@@ -434,26 +466,22 @@ fun R2Screen() {
 
                                 scope.launch {
                                     isDeployingMultipart = true
-                                    statusMsg = "Menyiapkan Atomic Multipart Binding ke '$selectedWorker'..."
+                                    statusMsg = "Menyimpan binding ke worker '" + w + "'..."
                                     try {
                                         val accId = CfAccountHelper.ensureAccountId()
 
-                                        // 1. Tarik binding eksisting (GET Settings)
-                                        val getRes = ApiClient.api.getWorkerBindings(accId, selectedWorker)
+                                        val getRes = ApiClient.api.getWorkerBindings(accId, w)
                                         val existingBindings = if (getRes.isSuccessful && getRes.body()?.success == true) {
                                             getRes.body()?.result?.toMutableList() ?: mutableListOf()
                                         } else {
                                             mutableListOf()
                                         }
 
-                                        // 2. Filter binding lama dengan nama & tipe yang sama (mencegah duplikat)
                                         val filteredList = existingBindings.filter {
                                             val name = it.get("name")?.asString
-                                            val type = it.get("type")?.asString
-                                            !(name == bindingVarName && type == bindingType)
+                                            !(name == bindingVarName)
                                         }.toMutableList()
 
-                                        // 3. Buat objek binding baru sesuai tipe
                                         val newBindingObj = JsonObject().apply {
                                             addProperty("type", bindingType)
                                             addProperty("name", bindingVarName)
@@ -465,43 +493,55 @@ fun R2Screen() {
                                         }
                                         filteredList.add(newBindingObj)
 
-                                        // 4. Susun Multipart Body PATCH Settings persis seperti Web Backend
                                         val settingsMap = mapOf("bindings" to filteredList)
                                         val settingsJsonStr = gson.toJson(settingsMap)
                                         val settingsRequestBody = settingsJsonStr.toRequestBody("application/json".toMediaTypeOrNull())
                                         val settingsPart = MultipartBody.Part.createFormData("settings", "settings.json", settingsRequestBody)
 
-                                        val patchRes = ApiClient.api.patchWorkerSettingsMultipart(accId, selectedWorker, settingsPart)
+                                        val patchRes = ApiClient.api.patchWorkerSettingsMultipart(accId, w, settingsPart)
                                         if (patchRes.isSuccessful && patchRes.body()?.success == true) {
-                                            statusMsg = "✅ Sukses pasang binding '$bindingVarName' di worker '$selectedWorker'!"
-                                            loadBindings(selectedWorker)
+                                            statusMsg = "✅ Sukses pasang binding env." + bindingVarName + " di '" + w + "'!"
+                                            loadBindings(w)
                                             manualTargetId = ""
                                         } else {
-                                            val err = patchRes.body()?.errors?.firstOrNull()?.message ?: "HTTP ${patchRes.code()}"
-                                            statusMsg = "Gagal binding: $err"
+                                            val err = patchRes.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + patchRes.code())
+                                            statusMsg = "Gagal binding: " + err
                                         }
                                     } catch (e: Exception) {
-                                        statusMsg = "Error: ${e.message}"
+                                        statusMsg = "Error: " + e.message
                                     } finally {
                                         isDeployingMultipart = false
                                     }
                                 }
                             },
                             modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
                             enabled = !isDeployingMultipart && selectedWorker.isNotBlank()
                         ) {
-                            Text(if (isDeployingMultipart) "Mengirim Multipart..." else "🔗 Pasang Binding (Atomic Multipart)")
+                            Text(if (isDeployingMultipart) "Menyimpan Binding..." else "🔗 Pasang Binding ke Worker")
                         }
                     }
                 }
             }
 
             item {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("Daftar Binding Aktif di Worker '$selectedWorker':", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Daftar Binding Aktif di Worker '" + selectedWorker + "' (" + bindingList.size + "):",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = { if (selectedWorker.isNotBlank()) loadBindings(selectedWorker) }, enabled = !isLoadingBindings) {
+                        Text(if (isLoadingBindings) "⏳" else "🔄")
+                    }
+                }
             }
 
-            if (currentRawBindings.isEmpty()) {
+            if (bindingList.isEmpty()) {
                 item {
                     Text(
                         text = if (isLoadingBindings) "Memuat binding worker..." else "Tidak ada binding R2 atau KV yang terpasang di worker ini.",
@@ -511,55 +551,81 @@ fun R2Screen() {
                 }
             }
 
-            items(currentRawBindings) { bObj ->
-                val bType = bObj.get("type")?.asString ?: ""
-                if (bType == "r2_bucket" || bType == "kv_namespace") {
-                    val bName = bObj.get("name")?.asString ?: ""
-                    val targetName = if (bType == "r2_bucket") bObj.get("bucket_name")?.asString else bObj.get("namespace_id")?.asString
+            items(bindingList) { b ->
+                val isR2 = (b.type == "r2_bucket")
+                val badgeColor = if (isR2) Color(0xFFEA580C) else Color(0xFF9333EA)
+                val badgeBg = if (isR2) Color(0xFFFFF7ED) else Color(0xFFFAF5FF)
+                val badgeText = if (isR2) "R2 BUCKET (💿)" else "KV NAMESPACE (📦)"
 
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                        shape = RoundedCornerShape(10.dp)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("env.$bName", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                Text("Tipe: ${bType.uppercase()} | Target: $targetName", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                            }
-
-                            IconButton(onClick = {
-                                scope.launch {
-                                    statusMsg = "Mencopot binding env.$bName..."
-                                    try {
-                                        val accId = CfAccountHelper.ensureAccountId()
-                                        val getRes = ApiClient.api.getWorkerBindings(accId, selectedWorker)
-                                        if (getRes.isSuccessful && getRes.body()?.success == true) {
-                                            val list = getRes.body()?.result?.toMutableList() ?: mutableListOf()
-                                            val filtered = list.filter { !(it.get("name")?.asString == bName && it.get("type")?.asString == bType) }
-
-                                            val settingsMap = mapOf("bindings" to filtered)
-                                            val settingsJsonStr = gson.toJson(settingsMap)
-                                            val settingsRequestBody = settingsJsonStr.toRequestBody("application/json".toMediaTypeOrNull())
-                                            val settingsPart = MultipartBody.Part.createFormData("settings", "settings.json", settingsRequestBody)
-
-                                            val patchRes = ApiClient.api.patchWorkerSettingsMultipart(accId, selectedWorker, settingsPart)
-                                            if (patchRes.isSuccessful && patchRes.body()?.success == true) {
-                                                statusMsg = "🗑 Binding env.$bName berhasil dicopot!"
-                                                loadBindings(selectedWorker)
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        statusMsg = "Error: ${e.message}"
-                                    }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Surface(shape = RoundedCornerShape(4.dp), color = badgeBg) {
+                                    Text(
+                                        text = badgeText,
+                                        color = badgeColor,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
                                 }
-                            }) {
-                                Text("🗑")
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "env." + b.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
                             }
+
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Target: " + b.target,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+
+                        IconButton(onClick = {
+                            scope.launch {
+                                statusMsg = "Mencopot binding env." + b.name + "..."
+                                try {
+                                    val accId = CfAccountHelper.ensureAccountId()
+                                    val getRes = ApiClient.api.getWorkerBindings(accId, selectedWorker)
+                                    if (getRes.isSuccessful && getRes.body()?.success == true) {
+                                        val list = getRes.body()?.result?.toMutableList() ?: mutableListOf()
+                                        val filtered = list.filter { !(it.get("name")?.asString == b.name) }
+
+                                        val settingsMap = mapOf("bindings" to filtered)
+                                        val settingsJsonStr = gson.toJson(settingsMap)
+                                        val settingsRequestBody = settingsJsonStr.toRequestBody("application/json".toMediaTypeOrNull())
+                                        val settingsPart = MultipartBody.Part.createFormData("settings", "settings.json", settingsRequestBody)
+
+                                        val patchRes = ApiClient.api.patchWorkerSettingsMultipart(accId, selectedWorker, settingsPart)
+                                        if (patchRes.isSuccessful && patchRes.body()?.success == true) {
+                                            statusMsg = "🗑 Binding env." + b.name + " berhasil dicopot!"
+                                            loadBindings(selectedWorker)
+                                        } else {
+                                            val err = patchRes.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + patchRes.code())
+                                            statusMsg = "Gagal mencopot: " + err
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    statusMsg = "Error: " + e.message
+                                }
+                            }
+                        }) {
+                            Text("🗑")
                         }
                     }
                 }

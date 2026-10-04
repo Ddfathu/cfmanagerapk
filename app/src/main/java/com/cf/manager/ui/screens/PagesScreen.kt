@@ -58,18 +58,19 @@ fun PagesScreen() {
     val apiKey = AppConfig.activeApiKey.ifBlank { currAcc?.apiKey ?: "" }
 
     var selectedPagesTab by remember { mutableStateOf(0) }
-    val pagesTabTitles = listOf("📋 Project", "➕ Buat Project", "🚀 Bulk Multi-Akun")
+    val pagesTabTitles = listOf("📋 Project", "🚀 Buat / Deploy", "⚡ Bulk Multi-Akun")
 
     var projects by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoadingProjects by remember { mutableStateOf(false) }
     var statusMsg by remember { mutableStateOf("") }
 
-    // State Buat Project Baru Tunggal
+    // State Buat Project Baru / Deploy
     var newProjectName by remember { mutableStateOf("") }
     var newRawUrl by remember { mutableStateOf("") }
     var rawTargetTab by remember { mutableStateOf(0) }
     var isFetchingNewRaw by remember { mutableStateOf(false) }
     var isDeployingNew by remember { mutableStateOf(false) }
+    var isPullingDeploy by remember { mutableStateOf(false) }
 
     // State Runtime Pages (Default 2024-01-01 & nodejs_compat)
     var pagesCompatDate by remember { mutableStateOf("2024-01-01") }
@@ -134,6 +135,50 @@ fun PagesScreen() {
         }
     }
 
+    // Fungsi Tarik Deploy Terakhir (Snapshot Lokal maupun Konfigurasi Cloudflare)
+    fun pullLatestDeployment(pName: String) {
+        if (pName.isBlank()) {
+            statusMsg = "Pilih atau isi nama project terlebih dahulu!"
+            return
+        }
+        val snapshot = historyStorage.getSnapshot(pName)
+        if (snapshot != null) {
+            newProjectName = snapshot.projectName
+            htmlContent = snapshot.htmlContent
+            workerScript = snapshot.workerScript
+            pagesCompatDate = snapshot.compatDate
+            pagesEnableNodeCompat = snapshot.enableNodeCompat
+            detectedBindings = SmartWranglerParser.parseScriptBindings(snapshot.workerScript)
+            statusMsg = "📥 Berhasil menarik snapshot deploy terakhir '$pName' beserta Runtime ${snapshot.compatDate}!"
+        } else {
+            scope.launch {
+                isPullingDeploy = true
+                try {
+                    val accId = CfAccountHelper.ensureAccountId()
+                    val res = ApiClient.api.listPagesProjects(accId)
+                    if (res.isSuccessful && res.body()?.success == true) {
+                        val matched = res.body()?.result?.find { it.get("name")?.asString.equals(pName, ignoreCase = true) }
+                        if (matched != null) {
+                            newProjectName = pName
+                            val prodCfg = matched.getAsJsonObject("deployment_configs")?.getAsJsonObject("production")
+                            val cDate = prodCfg?.get("compatibility_date")?.asString ?: "2024-01-01"
+                            val flags = prodCfg?.getAsJsonArray("compatibility_flags")?.map { it.asString } ?: emptyList()
+                            pagesCompatDate = cDate
+                            pagesEnableNodeCompat = flags.contains("nodejs_compat")
+                            statusMsg = "📥 Berhasil memuat project '$pName' dari Cloudflare (Runtime: $cDate)!"
+                        } else {
+                            statusMsg = "Project '$pName' tidak ditemukan di Cloudflare."
+                        }
+                    }
+                } catch (e: Exception) {
+                    statusMsg = "Gagal tarik data: " + e.message
+                } finally {
+                    isPullingDeploy = false
+                }
+            }
+        }
+    }
+
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { treeUri: Uri? ->
@@ -157,7 +202,9 @@ fun PagesScreen() {
                             }
                             if (file.name.equals("_worker.js", ignoreCase = true)) {
                                 context.contentResolver.openInputStream(file.uri)?.use { stream ->
-                                    workerScript = stream.bufferedReader().readText()
+                                    val ws = stream.bufferedReader().readText()
+                                    workerScript = ws
+                                    detectedBindings = SmartWranglerParser.parseScriptBindings(ws)
                                 }
                                 foundWorker = true
                             }
@@ -210,6 +257,7 @@ fun PagesScreen() {
                 val content = context.contentResolver.openInputStream(fileUri)?.bufferedReader().use { it?.readText() } ?: ""
                 if (content.isNotBlank()) {
                     workerScript = content
+                    detectedBindings = SmartWranglerParser.parseScriptBindings(content)
                     editorCodeTab = 1
                     statusMsg = "⚡ File _worker.js berhasil dimuat ke editor!"
                 }
@@ -238,7 +286,7 @@ fun PagesScreen() {
                     }
                     projects = list
                 } else {
-                    val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                    val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
                     statusMsg = "Gagal memuat project: $err"
                 }
             } catch (e: Exception) {
@@ -278,7 +326,7 @@ fun PagesScreen() {
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            PrimaryTabRow(selectedTabIndex = selectedPagesTab) {
+            PrimaryTabRow(selectedPagesTab) {
                 pagesTabTitles.forEachIndexed { idx, title ->
                     Tab(
                         selected = selectedPagesTab == idx,
@@ -289,10 +337,25 @@ fun PagesScreen() {
             }
         }
 
-        // SUB-TAB 0: DAFTAR PROJECT PAGES (DENGAN RESTORE SNAPSHOT TERAKHIR & RUNTIME)
+        // ==================== SUB-TAB 0: DAFTAR PROJECT ====================
         if (selectedPagesTab == 0) {
             item {
-                Text("Daftar Project Pages Aktif (${projects.size}):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Daftar Project Pages Aktif (${projects.size}):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Button(
+                        onClick = {
+                            newProjectName = ""
+                            selectedPagesTab = 1
+                        },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text("+ Buat Baru")
+                    }
+                }
             }
 
             if (projects.isEmpty() && !isLoadingProjects) {
@@ -324,31 +387,39 @@ fun PagesScreen() {
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
 
+                        // TOMBOL AKSI LENGKAP: 🚀 DEPLOY, 📥 TARIK TERAKHIR, 🌐 KELOLA DOMAIN, 🗑 HAPUS
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
+                            // TOMBOL 1: DEPLOY LANGSUNG (LARI KE TAB 1)
+                            Button(
+                                onClick = {
+                                    pullLatestDeployment(pName)
+                                    selectedPagesTab = 1
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
+                                modifier = Modifier.weight(1.1f),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Text("🚀 Deploy")
+                            }
+
+                            // TOMBOL 2: TARIK TERAKHIR
                             OutlinedButton(
                                 onClick = {
-                                    if (snapshot != null) {
-                                        newProjectName = snapshot.projectName
-                                        htmlContent = snapshot.htmlContent
-                                        workerScript = snapshot.workerScript
-                                        pagesCompatDate = snapshot.compatDate
-                                        pagesEnableNodeCompat = snapshot.enableNodeCompat
-                                        selectedPagesTab = 1
-                                        statusMsg = "📥 Berhasil menarik deploy terakhir '$pName' beserta Runtime ${snapshot.compatDate}!"
-                                    } else {
-                                        statusMsg = "⚠️ Belum ada riwayat snapshot deploy lokal untuk '$pName'."
-                                    }
+                                    pullLatestDeployment(pName)
+                                    selectedPagesTab = 1
                                 },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                                modifier = Modifier.weight(1.3f),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp)
                             ) {
                                 Text("📥 Tarik Terakhir")
                             }
 
+                            // TOMBOL 3: KELOLA DOMAIN
                             Button(
                                 onClick = {
                                     activeProjectForDomain = pName
@@ -356,19 +427,20 @@ fun PagesScreen() {
                                     loadCustomDomains(pName)
                                     showDomainDialog = true
                                 },
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                                modifier = Modifier.weight(1.1f),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp)
                             ) {
-                                Text("🌐 Kelola Domain")
+                                Text("🌐 Domain")
                             }
 
-                            Button(
+                            // TOMBOL 4: HAPUS
+                            IconButton(
                                 onClick = {
                                     projectToDelete = pName
                                     showDeleteConfirm = true
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                                modifier = Modifier.size(36.dp)
                             ) {
                                 Text("🗑")
                             }
@@ -378,7 +450,7 @@ fun PagesScreen() {
             }
         }
 
-        // SUB-TAB 1: FORMULIR BUAT PROJECT DENGAN RUNTIME, SMART WRANGLER & SNAPSHOT LOKAL
+        // ==================== SUB-TAB 1: STUDIO BUAT / DEPLOY ====================
         if (selectedPagesTab == 1) {
             item {
                 Card(
@@ -392,20 +464,23 @@ fun PagesScreen() {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column {
-                                Text("🚀 Studio Editor Pages", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                Text("Konfigurasi Runtime & Simpan Snapshot Lokal", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (newProjectName.isNotBlank()) "🚀 Deploy: $newProjectName" else "🚀 Studio Editor Pages",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text("Konfigurasi Runtime & Deploy ke Pages", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                             }
                             Button(
                                 onClick = {
-                                    val detected = SmartWranglerParser.parseScriptBindings(workerScript)
-                                    detectedBindings = detected
+                                    detectedBindings = SmartWranglerParser.parseScriptBindings(workerScript)
                                     showWranglerModal = true
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                             ) {
-                                Text("🧠 Smart Wrangler")
+                                Text("🧠 Wrangler (" + detectedBindings.size + ")")
                             }
                         }
 
@@ -434,17 +509,33 @@ fun PagesScreen() {
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        OutlinedTextField(
-                            value = newProjectName,
-                            onValueChange = { newProjectName = it.lowercase().trim() },
-                            label = { Text("Nama Project (.pages.dev)") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        // NAMA PROJECT & TOMBOL TARIK DEPLOY TERAKHIR DI MENU DEPLOY
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = newProjectName,
+                                onValueChange = { newProjectName = it.lowercase().trim() },
+                                label = { Text("Nama Project (.pages.dev)") },
+                                placeholder = { Text("contoh: webku") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Button(
+                                onClick = { pullLatestDeployment(newProjectName) },
+                                enabled = !isPullingDeploy && newProjectName.isNotBlank(),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF475569)),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                            ) {
+                                Text(if (isPullingDeploy) "..." else "📥 Tarik Terakhir")
+                            }
+                        }
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // SETELAN RUNTIME PAGES (COMPATIBILITY DATE & NODE COMPAT)
+                        // RUNTIME DATE & NODEJS_COMPAT
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -494,6 +585,7 @@ fun PagesScreen() {
                                                 statusMsg = "✅ Berhasil menarik kode ke index.html!"
                                             } else {
                                                 workerScript = fetched
+                                                detectedBindings = SmartWranglerParser.parseScriptBindings(fetched)
                                                 editorCodeTab = 1
                                                 statusMsg = "✅ Berhasil menarik kode ke _worker.js!"
                                             }
@@ -525,7 +617,7 @@ fun PagesScreen() {
                         HorizontalDivider()
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        SecondaryTabRow(selectedTabIndex = editorCodeTab) {
+                        SecondaryTabRow(editorCodeTab) {
                             Tab(selected = editorCodeTab == 0, onClick = { editorCodeTab = 0 }, text = { Text("📄 index.html", fontWeight = FontWeight.Bold) })
                             Tab(selected = editorCodeTab == 1, onClick = { editorCodeTab = 1 }, text = { Text("⚡ _worker.js", fontWeight = FontWeight.Bold) })
                         }
@@ -556,7 +648,10 @@ fun PagesScreen() {
                         } else {
                             OutlinedTextField(
                                 value = workerScript,
-                                onValueChange = { workerScript = it },
+                                onValueChange = {
+                                    workerScript = it
+                                    detectedBindings = SmartWranglerParser.parseScriptBindings(it)
+                                },
                                 modifier = Modifier.fillMaxWidth().height(140.dp),
                                 textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace)
                             )
@@ -591,7 +686,6 @@ fun PagesScreen() {
 
                                         val res = ApiClient.api.createPagesProject(accId, payload)
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            // SIMPAN KE SNAPSHOT LOKAL APK BESERTA RUNTIME
                                             historyStorage.saveSnapshot(
                                                 PagesDeploySnapshot(
                                                     projectName = target,
@@ -601,11 +695,11 @@ fun PagesScreen() {
                                                     enableNodeCompat = pagesEnableNodeCompat
                                                 )
                                             )
-                                            statusMsg = "🎉 Pages '$target' berhasil dibuat dengan Runtime $pagesCompatDate!"
+                                            statusMsg = "🎉 Pages '$target' berhasil dideploy dengan Runtime $pagesCompatDate!"
                                             selectedPagesTab = 0
                                             loadProjects()
                                         } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
                                             statusMsg = "Gagal: $err"
                                         }
                                     } catch (e: Exception) {
@@ -616,16 +710,17 @@ fun PagesScreen() {
                                 }
                             },
                             modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
                             enabled = !isDeployingNew && newProjectName.isNotBlank()
                         ) {
-                            Text(if (isDeployingNew) "Mendaftarkan..." else "🚀 Simpan Snapshot & Buat Pages")
+                            Text(if (isDeployingNew) "Deploying ke Pages..." else "🚀 Simpan Snapshot & Deploy Pages")
                         }
                     }
                 }
             }
         }
 
-        // SUB-TAB 2: BULK MULTI-AKUN (MENYERTAKAN RUNTIME CONFIG)
+        // ==================== SUB-TAB 2: BULK MULTI-AKUN ====================
         if (selectedPagesTab == 2) {
             item {
                 Card(
@@ -905,7 +1000,7 @@ fun PagesScreen() {
                                             customDomainInput = ""
                                             loadCustomDomains(activeProjectForDomain)
                                         } else {
-                                            val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
+                                            val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
                                             statusMsg = "Gagal: $err"
                                         }
                                     } catch (e: Exception) {
@@ -1017,8 +1112,8 @@ fun PagesScreen() {
                                 statusMsg = "🗑 Project '$projectToDelete' berhasil dihapus!"
                                 loadProjects()
                             } else {
-                                val err = res.body()?.errors?.firstOrNull()?.message ?: "HTTP ${res.code()}"
-                                statusMsg = "Gagal menghapus: $err"
+                                val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
+                                statusMsg = "Gagal menghapus: " + err
                             }
                         } catch (e: Exception) {
                             statusMsg = "Error: ${e.message}"
