@@ -40,9 +40,8 @@ data class CfBindingListResponse(
     val result: List<JsonObject>?
 )
 
-// ==================== 2. INTERFACE WORKER API LENGKAP ====================
+// ==================== 2. INTERFACE WORKER API ====================
 interface WorkerApi {
-    // --- WORKERS & DOMAINS ---
     @GET("accounts/{accountId}/workers/services")
     suspend fun listWorkers(@Path("accountId") accountId: String): Response<CfListResponse>
 
@@ -107,17 +106,10 @@ interface WorkerApi {
         @Part settings: MultipartBody.Part
     ): Response<CfStandardResponse>
 
-    // --- ZONES & DOMAIN UTAMA ---
+    // --- ZONES & DNS ---
     @GET("zones")
     suspend fun listZones(@Query("account.id") accountId: String? = null): Response<CfListResponse>
 
-    @POST("zones")
-    suspend fun createZone(@Body body: Map<String, Any>): Response<CfStandardResponse>
-
-    @DELETE("zones/{zoneId}")
-    suspend fun deleteZone(@Path("zoneId") zoneId: String): Response<CfStandardResponse>
-
-    // --- DNS RECORDS ---
     @GET("zones/{zoneId}/dns_records")
     suspend fun listDns(@Path("zoneId") zoneId: String, @Query("per_page") perPage: Int = 100): Response<CfListResponse>
 
@@ -129,22 +121,6 @@ interface WorkerApi {
 
     @DELETE("zones/{zoneId}/dns_records/{recordId}")
     suspend fun deleteDns(@Path("zoneId") zoneId: String, @Path("recordId") recordId: String): Response<CfStandardResponse>
-
-    // --- EMAIL ROUTING ---
-    @GET("accounts/{accountId}/email/routing/addresses")
-    suspend fun listEmailDestinations(@Path("accountId") accountId: String): Response<CfListResponse>
-
-    @GET("zones/{zoneId}/email/routing/rules")
-    suspend fun listEmailRules(@Path("zoneId") zoneId: String): Response<CfListResponse>
-
-    @GET("zones/{zoneId}/email/routing/rules/catch_all")
-    suspend fun getEmailCatchAll(@Path("zoneId") zoneId: String): Response<CfStandardResponse>
-
-    @POST("zones/{zoneId}/email/routing/rules")
-    suspend fun createEmailRule(@Path("zoneId") zoneId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
-
-    @DELETE("zones/{zoneId}/email/routing/rules/{ruleId}")
-    suspend fun deleteEmailRule(@Path("zoneId") zoneId: String, @Path("ruleId") ruleId: String): Response<CfStandardResponse>
 
     // --- TUNNELS ---
     @GET("accounts/{accountId}/cfd_tunnel")
@@ -165,7 +141,7 @@ interface WorkerApi {
     @PUT("accounts/{accountId}/cfd_tunnel/{tunnelId}/configurations")
     suspend fun updateTunnelConfigurations(@Path("accountId") accountId: String, @Path("tunnelId") tunnelId: String, @Body body: Map<String, Any>): Response<CfStandardResponse>
 
-    // --- R2 BUCKETS ---
+    // --- R2 ---
     @GET("accounts/{accountId}/r2/buckets")
     suspend fun listR2Buckets(@Path("accountId") accountId: String): Response<JsonObject>
 
