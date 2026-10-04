@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.documentfile.provider.DocumentFile
 import com.cf.dfathu.data.AppConfig
 import com.cf.dfathu.data.BindingType
 import com.cf.dfathu.data.DetectedBinding
@@ -51,8 +52,8 @@ data class WorkerDomainItem(
 fun WorkerEditorScreen() {
     val context = LocalContext.current
     val storage = remember { AccountStorage(context) }
-    val accounts = remember { storage.getAccounts() }
-    val activeIdx = remember { storage.getActiveIndex() }
+    val accounts = storage.getAccounts()
+    val activeIdx = storage.getActiveIndex()
     val currAcc = accounts.getOrNull(activeIdx)
     val email = AppConfig.activeEmail.ifBlank { currAcc?.email ?: "" }
     val apiKey = AppConfig.activeApiKey.ifBlank { currAcc?.apiKey ?: "" }
@@ -346,7 +347,6 @@ fun WorkerEditorScreen() {
                                         val res = ApiClient.api.getWorkerCode(accId, wName)
                                         if (res.isSuccessful) {
                                             var code = res.body()?.string() ?: ""
-                                            // LOGIKA BERSIH DARI SC WEB: Buang header multipart boundary Cloudflare
                                             if (code.contains("name=\"index.js\"")) {
                                                 code = code.replace(Regex("^--[\\s\\S]*?name=\"index.js\"[\\s\\S]*?\\r?\\n\\r?\\n"), "")
                                                            .replace(Regex("\\r?\\n--[a-f0-9]+--\\s*$"), "")
@@ -355,7 +355,6 @@ fun WorkerEditorScreen() {
                                                            .replace(Regex("\\r?\\n--[a-f0-9]+--\\s*$"), "")
                                             }
                                             editingScriptCode = code.trim()
-                                            // AUTO SMART WRANGLER: Langsung parsing binding begitu kode ditarik
                                             detectedBindings = SmartWranglerParser.parseScriptBindings(editingScriptCode)
                                         } else {
                                             editingScriptCode = "/* Gagal mengunduh kode */"
