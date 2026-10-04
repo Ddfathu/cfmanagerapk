@@ -3,8 +3,13 @@ package com.cf.dfathu.ui.screens
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -13,6 +18,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.toAndroidDragEvent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -24,6 +32,7 @@ import com.cf.dfathu.data.AppConfig
 import com.cf.dfathu.data.api.ApiClient
 import com.cf.dfathu.data.api.CfAccountHelper
 import com.cf.dfathu.data.local.AccountStorage
+import com.cf.dfathu.data.model.CfAccount
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
@@ -33,8 +42,10 @@ import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.InputStream
 import java.security.MessageDigest
 import java.util.Base64
+import java.util.UUID
 
 data class CfPagesProjectItem(
     val name: String,
@@ -63,30 +74,24 @@ data class NodeLocDnsRecordItem(
     val ttl: Int = 300
 )
 
-data class KvOptionItem(val id: String, val title: String)
-
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun PagesNodeLocScreen() {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val storage = remember { AccountStorage(context) }
-    val accounts = remember { storage.getAccounts() }
+    val allAccounts = remember { storage.getAccounts().filter { it.email.isNotBlank() && it.apiKey.isNotBlank() } }
     val activeIdx = remember { storage.getActiveIndex() }
-    val currAcc = accounts.getOrNull(activeIdx)
+    val currAcc = allAccounts.getOrNull(activeIdx)
     val email = AppConfig.activeEmail.ifBlank { currAcc?.email ?: "" }
     val apiKey = AppConfig.activeApiKey.ifBlank { currAcc?.apiKey ?: "" }
 
-    var mainTab by remember { mutableStateOf(0) } // 0: CF Pages, 1: NodeLoc DNS
-    val tabTitles = listOf("🚀 CF Pages", "🌐 NodeLoc DNS")
+    var mainTab by remember { mutableStateOf(0) } // 0: Single Pages, 1: ⚡ Bulk Deploy Pages, 2: 🌐 NodeLoc DNS
+    val tabTitles = listOf("🚀 Single Pages", "⚡ Bulk Deploy", "🌐 NodeLoc DNS")
 
-    // --- STATE CF PAGES ---
+    // --- STATE CF PAGES SINGLE ---
     var pagesProjects by remember { mutableStateOf<List<CfPagesProjectItem>>(emptyList()) }
     var isLoadingPages by remember { mutableStateOf(false) }
-
-    // State Resources KV & R2
-    var kvOptions by remember { mutableStateOf<List<KvOptionItem>>(emptyList()) }
-    var r2Options by remember { mutableStateOf<List<String>>(emptyList()) }
 
     // Dialog Create Pages Project
     var showCreateProjectDialog by remember { mutableStateOf(false) }
@@ -98,20 +103,24 @@ fun PagesNodeLocScreen() {
     var showDeployDialog by remember { mutableStateOf(false) }
     var targetDeployProject by remember { mutableStateOf("") }
     var rawFetchUrlInput by remember { mutableStateOf("") }
-    var targetFetchInject by remember { mutableStateOf("worker") } // worker / html
+    var targetFetchInject by remember { mutableStateOf("worker") }
     var rawWorkerScriptInput by remember { mutableStateOf("") }
     var rawHtmlInput by remember { mutableStateOf("<!DOCTYPE html>\n<html><body><h1>Pages Active</h1></body></html>") }
+
+    // --- STATE BULK DEPLOY PAGES ---
+    val selectedBulkAccounts = remember { mutableStateListOf<CfAccount>().apply { addAll(allAccounts) } }
+    var bulkProjectPrefix by remember { mutableStateOf("app-") }
+    var bulkWorkerScriptInput by remember { mutableStateOf("") }
+    var bulkHtmlInput by remember { mutableStateOf("<!DOCTYPE html>\n<html><body><h1>Pages Bulk Active</h1></body></html>") }
+    var bulkDeployResultLog by remember { mutableStateOf("") }
+    var isBulkProcessing by remember { mutableStateOf(false) }
 
     // Dialog Config Project & Bindings
     var showConfigDialog by remember { mutableStateOf(false) }
     var targetConfigProject by remember { mutableStateOf("") }
     var configCompatDate by remember { mutableStateOf("2024-01-01") }
     var configNodejsCompat by remember { mutableStateOf(true) }
-    var placementMode by remember { mutableStateOf("off") } // off, smart, manual
-    var manualRegionCode by remember { mutableStateOf("ap-southeast-1") }
-    var autoRedeployConfig by remember { mutableStateOf(true) }
 
-    // Dynamic Lists buat Config
     val envList = remember { mutableStateListOf<Pair<String, String>>() }
     val kvBindingList = remember { mutableStateListOf<Pair<String, String>>() }
     val r2BindingList = remember { mutableStateListOf<Pair<String, String>>() }
@@ -120,7 +129,7 @@ fun PagesNodeLocScreen() {
     var showDomainModal by remember { mutableStateOf(false) }
     var targetDomainProject by remember { mutableStateOf("") }
     var targetDomainSubdomain by remember { mutableStateOf("") }
-    var domainAddTab by remember { mutableStateOf("single") } // single / bulk
+    var domainAddTab by remember { mutableStateOf("single") }
     var singleDomainInput by remember { mutableStateOf("") }
     var bulkDomainInput by remember { mutableStateOf("") }
     var autoSyncNodeLocCname by remember { mutableStateOf(true) }
@@ -128,7 +137,7 @@ fun PagesNodeLocScreen() {
     var domainSyncLog by remember { mutableStateOf("") }
 
     // --- STATE NODELOC DNS ---
-    var nodeLocTokenInput by remember { mutableStateOf(storage.getAccounts().firstOrNull()?.apiKey ?: "") }
+    var nodeLocTokenInput by remember { mutableStateOf(allAccounts.firstOrNull()?.apiKey ?: "") }
     var nodeLocDomains by remember { mutableStateOf<List<NodeLocDomainItem>>(emptyList()) }
     var selectedNlDomain by remember { mutableStateOf<NodeLocDomainItem?>(null) }
     var nlDomainExpanded by remember { mutableStateOf(false) }
@@ -158,6 +167,46 @@ fun PagesNodeLocScreen() {
     val gson = remember { Gson() }
     val httpClient = remember { OkHttpClient() }
 
+    // --- LAUNCHER FILE PICKER ANDROID ---
+    var filePickerTarget by remember { mutableStateOf("worker_single") }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            try {
+                val inputStream: InputStream? = context.contentResolver.openInputStream(it)
+                val content = inputStream?.bufferedReader()?.use { reader -> reader.readText() } ?: ""
+                when (filePickerTarget) {
+                    "worker_single" -> rawWorkerScriptInput = content
+                    "html_single" -> rawHtmlInput = content
+                    "worker_bulk" -> bulkWorkerScriptInput = content
+                    "html_bulk" -> bulkHtmlInput = content
+                }
+                Toast.makeText(context, "✅ File berhasil dimuat!", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(context, "Gagal membaca file: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // --- HELPER READ URI DRAG DROP ---
+    fun handleReadUri(uri: Uri, target: String) {
+        try {
+            val inputStream = context.contentResolver.openInputStream(uri)
+            val content = inputStream?.bufferedReader()?.use { it.readText() } ?: ""
+            when (target) {
+                "worker_single" -> rawWorkerScriptInput = content
+                "html_single" -> rawHtmlInput = content
+                "worker_bulk" -> bulkWorkerScriptInput = content
+                "html_bulk" -> bulkHtmlInput = content
+            }
+            Toast.makeText(context, "✅ File Drag & Drop Berhasil!", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(context, "Gagal drag file: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun openBrowserUrl(urlStr: String) {
         try {
             val fullUrl = if (!urlStr.startsWith("http://") && !urlStr.startsWith("https://")) "https://$urlStr" else urlStr
@@ -168,48 +217,106 @@ fun PagesNodeLocScreen() {
         }
     }
 
-    // --- FETCH RESOURCES (KV & R2) ---
-    fun fetchResources() {
-        if (email.isBlank() || apiKey.isBlank()) return
-        scope.launch {
-            try {
-                val accId = CfAccountHelper.ensureAccountId()
-                // KV Namespaces
-                val kvReq = Request.Builder()
-                    .url("https://api.cloudflare.com/client/v4/accounts/$accId/storage/kv/namespaces?per_page=100")
-                    .header("X-Auth-Email", email)
-                    .header("X-Auth-Key", apiKey)
-                    .get().build()
-                val kvResp = withContext(Dispatchers.IO) { httpClient.newCall(kvReq).execute() }
-                val kvJson = gson.fromJson(kvResp.body?.string() ?: "", JsonObject::class.java)
-                val kvArr = kvJson?.getAsJsonArray("result") ?: JsonArray()
-                val kvs = mutableListOf<KvOptionItem>()
-                kvArr.forEach { el ->
-                    val obj = el.asJsonObject
-                    kvs.add(KvOptionItem(obj.get("id")?.asString ?: "", obj.get("title")?.asString ?: ""))
-                }
-                kvOptions = kvs
-
-                // R2 Buckets
-                val r2Req = Request.Builder()
-                    .url("https://api.cloudflare.com/client/v4/accounts/$accId/r2/buckets")
-                    .header("X-Auth-Email", email)
-                    .header("X-Auth-Key", apiKey)
-                    .get().build()
-                val r2Resp = withContext(Dispatchers.IO) { httpClient.newCall(r2Req).execute() }
-                val r2Json = gson.fromJson(r2Resp.body?.string() ?: "", JsonObject::class.java)
-                val r2Arr = r2Json?.getAsJsonObject("result")?.getAsJsonArray("buckets") ?: r2Json?.getAsJsonArray("result") ?: JsonArray()
-                val r2s = mutableListOf<String>()
-                r2Arr.forEach { el ->
-                    val name = if (el.isJsonObject) el.asJsonObject.get("name")?.asString ?: "" else el.asString
-                    if (name.isNotBlank()) r2s.add(name)
-                }
-                r2Options = r2s
-            } catch (_: Exception) {}
+    // --- HELPER DEPLOY CORE ---
+    suspend fun executePagesDeploy(
+        targetEmail: String,
+        targetApiKey: String,
+        projectName: String,
+        workerScript: String,
+        htmlContent: String
+    ): String {
+        val accIdRes = withContext(Dispatchers.IO) {
+            val req = Request.Builder()
+                .url("https://api.cloudflare.com/client/v4/accounts")
+                .header("X-Auth-Email", targetEmail)
+                .header("X-Auth-Key", targetApiKey)
+                .get().build()
+            val resp = httpClient.newCall(req).execute()
+            val json = gson.fromJson(resp.body?.string() ?: "", JsonObject::class.java)
+            json?.getAsJsonArray("result")?.get(0)?.asJsonObject?.get("id")?.asString ?: ""
         }
+
+        if (accIdRes.isBlank()) throw Exception("Gagal autentikasi ID Akun CF")
+
+        val createObj = JsonObject().apply {
+            addProperty("name", projectName)
+            addProperty("production_branch", "main")
+        }
+        val createReq = Request.Builder()
+            .url("https://api.cloudflare.com/client/v4/accounts/$accIdRes/pages/projects")
+            .header("X-Auth-Email", targetEmail)
+            .header("X-Auth-Key", targetApiKey)
+            .header("Content-Type", "application/json")
+            .post(createObj.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+            .build()
+        withContext(Dispatchers.IO) { httpClient.newCall(createReq).execute() }
+
+        val tokenReq = Request.Builder()
+            .url("https://api.cloudflare.com/client/v4/accounts/$accIdRes/pages/projects/$projectName/upload-token")
+            .header("X-Auth-Email", targetEmail)
+            .header("X-Auth-Key", targetApiKey)
+            .get().build()
+        val tokenResp = withContext(Dispatchers.IO) { httpClient.newCall(tokenReq).execute() }
+        val tokenJson = gson.fromJson(tokenResp.body?.string() ?: "", JsonObject::class.java)
+        val jwt = tokenJson?.getAsJsonObject("result")?.get("jwt")?.asString ?: throw Exception("Gagal generate Upload Token JWT")
+
+        val htmlBytes = htmlContent.toByteArray()
+        val md = MessageDigest.getInstance("MD5")
+        val hashHex = md.digest(htmlBytes).joinToString("") { "%02x".format(it) }
+
+        val manifestObj = JsonObject().apply { addProperty("/index.html", hashHex) }
+        val hashesArray = JsonArray().apply { add(hashHex) }
+
+        val b64Value = Base64.getEncoder().encodeToString(htmlBytes)
+        val uploadItem = JsonObject().apply {
+            addProperty("key", hashHex)
+            addProperty("value", b64Value)
+            add("metadata", JsonObject().apply { addProperty("contentType", "text/html; charset=utf-8") })
+            addProperty("base64", true)
+        }
+        val uploadArray = JsonArray().apply { add(uploadItem) }
+
+        val upReq = Request.Builder()
+            .url("https://api.cloudflare.com/client/v4/pages/assets/upload")
+            .header("Authorization", "Bearer $jwt")
+            .header("Content-Type", "application/json")
+            .post(uploadArray.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+            .build()
+        withContext(Dispatchers.IO) { httpClient.newCall(upReq).execute() }
+
+        val upsertReq = Request.Builder()
+            .url("https://api.cloudflare.com/client/v4/pages/assets/upsert-hashes")
+            .header("Authorization", "Bearer $jwt")
+            .header("Content-Type", "application/json")
+            .post(JsonObject().apply { add("hashes", hashesArray) }.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+            .build()
+        withContext(Dispatchers.IO) { httpClient.newCall(upsertReq).execute() }
+
+        val formBodyBuilder = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("manifest", manifestObj.toString())
+
+        if (workerScript.isNotBlank()) {
+            formBodyBuilder.addFormDataPart(
+                "_worker.js",
+                "_worker.js",
+                workerScript.toByteArray().toRequestBody("application/javascript".toMediaTypeOrNull())
+            )
+        }
+
+        val deployReq = Request.Builder()
+            .url("https://api.cloudflare.com/client/v4/accounts/$accIdRes/pages/projects/$projectName/deployments")
+            .header("X-Auth-Email", targetEmail)
+            .header("X-Auth-Key", targetApiKey)
+            .post(formBodyBuilder.build())
+            .build()
+
+        val deployResp = withContext(Dispatchers.IO) { httpClient.newCall(deployReq).execute() }
+        val deployJson = gson.fromJson(deployResp.body?.string() ?: "", JsonObject::class.java)
+
+        val subDomain = deployJson?.getAsJsonObject("result")?.get("url")?.asString ?: "https://$projectName.pages.dev"
+        return subDomain
     }
 
-    // --- LOAD PAGES PROJECTS ---
     fun loadPagesProjects() {
         if (email.isBlank() || apiKey.isBlank()) return
         scope.launch {
@@ -251,7 +358,6 @@ fun PagesNodeLocScreen() {
         }
     }
 
-    // --- LOAD PAGES DOMAINS ---
     fun loadPagesDomains(projectName: String) {
         if (email.isBlank() || apiKey.isBlank()) return
         scope.launch {
@@ -273,10 +379,9 @@ fun PagesNodeLocScreen() {
         }
     }
 
-    // --- LOAD NODELOC DOMAINS & RECORDS ---
     fun loadNodeLocDomains() {
         if (nodeLocTokenInput.isBlank()) {
-            statusMsg = "⚠️️ Masukkan Token JWT NodeLoc terlebih dahulu!"
+            statusMsg = "⚠ Masukkan Token JWT NodeLoc terlebih dahulu!"
             return
         }
         scope.launch {
@@ -356,7 +461,6 @@ fun PagesNodeLocScreen() {
     LaunchedEffect(email, apiKey) {
         if (email.isNotEmpty() && apiKey.isNotEmpty()) {
             loadPagesProjects()
-            fetchResources()
         }
     }
 
@@ -370,7 +474,6 @@ fun PagesNodeLocScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // --- HEADER UTAMA & SUB-TAB ---
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -379,12 +482,12 @@ fun PagesNodeLocScreen() {
             ) {
                 Column {
                     Text("⚡ Pages & NodeLoc Hub", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("Kelola CF Pages & NodeLoc DNS Manager", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("Kelola CF Pages Single/Bulk & NodeLoc DNS", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                 }
                 IconButton(
                     onClick = {
                         if (mainTab == 0) loadPagesProjects()
-                        else selectedNlDomain?.let { loadNodeLocRecords(it.id) }
+                        else if (mainTab == 2) selectedNlDomain?.let { loadNodeLocRecords(it.id) }
                     },
                     enabled = !isLoadingPages && !isLoadingNlDns
                 ) {
@@ -406,7 +509,7 @@ fun PagesNodeLocScreen() {
         }
 
         // ==========================================
-        // SUB-TAB 0: CLOUDFLARE PAGES
+        // SUB-TAB 0: SINGLE PAGES
         // ==========================================
         if (mainTab == 0) {
             item {
@@ -459,19 +562,14 @@ fun PagesNodeLocScreen() {
                                         if (resp.isSuccessful) {
                                             statusMsg = "🗑 Project ${p.name} dihapus!"
                                             loadPagesProjects()
-                                        } else {
-                                            statusMsg = "❌ Gagal hapus Pages"
                                         }
                                     } catch (e: Exception) {
                                         statusMsg = "Error: " + e.message
                                     }
                                 }
-                            }) {
-                                Text("🗑")
-                            }
+                            }) { Text("🗑") }
                         }
 
-                        // URL BISA DIKLIK & DISALIN
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 text = "https://${p.subdomain}",
@@ -489,14 +587,11 @@ fun PagesNodeLocScreen() {
                                     Toast.makeText(context, "URL Tersalin!", Toast.LENGTH_SHORT).show()
                                 },
                                 modifier = Modifier.size(24.dp)
-                            ) {
-                                Text("📋", style = MaterialTheme.typography.labelSmall)
-                            }
+                            ) { Text("📋", style = MaterialTheme.typography.labelSmall) }
                         }
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // TOMBOL FITUR LENGKAP
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -568,9 +663,173 @@ fun PagesNodeLocScreen() {
         }
 
         // ==========================================
-        // SUB-TAB 1: NODELOC DNS MANAGER
+        // SUB-TAB 1: ⚡ BULK DEPLOY (DENGAN DROP ZONE VISUAL)
         // ==========================================
         if (mainTab == 1) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("⚡ Bulk Deploy Cloudflare Pages", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFFEA580C))
+                        Text("Pilih banyak akun, auto generate nama project & deploy bersamaan!", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+
+                        Divider()
+
+                        Text("1. Pilih Akun CF Target (Centang):", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                        allAccounts.forEach { acc ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (selectedBulkAccounts.contains(acc)) selectedBulkAccounts.remove(acc)
+                                        else selectedBulkAccounts.add(acc)
+                                    },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = selectedBulkAccounts.contains(acc),
+                                    onCheckedChange = { isChecked ->
+                                        if (isChecked) selectedBulkAccounts.add(acc)
+                                        else selectedBulkAccounts.remove(acc)
+                                    }
+                                )
+                                Column {
+                                    Text(acc.alias, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                    Text(acc.email, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        Text("2. Parameter Project Auto-Generate:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                        OutlinedTextField(
+                            value = bulkProjectPrefix,
+                            onValueChange = { bulkProjectPrefix = it.lowercase().trim() },
+                            label = { Text("Prefix Nama Project (misal: myvpn-)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        // DROP ZONE VISUAL UNTUK WORKER JS BULK
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(2.dp, Color(0xFFEA580C), RoundedCornerShape(10.dp))
+                                .background(Color(0xFFFFF7ED), RoundedCornerShape(10.dp))
+                                .clickable {
+                                    filePickerTarget = "worker_bulk"
+                                    filePickerLauncher.launch("*/*")
+                                }
+                                .dragAndDropTarget(
+                                    shouldStartDragAndDrop = { true },
+                                    target = remember {
+                                        object : DragAndDropTarget {
+                                            override fun onDrop(event: DragAndDropEvent): Boolean {
+                                                val clipData = event.toAndroidDragEvent().clipData
+                                                if (clipData != null && clipData.itemCount > 0) {
+                                                    val uri = clipData.getItemAt(0).uri
+                                                    handleReadUri(uri, "worker_bulk")
+                                                    return true
+                                                }
+                                                return false
+                                            }
+                                        }
+                                    }
+                                )
+                                .padding(14.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("📁 DRAG & DROP FILE _worker.js KE SINI", fontWeight = FontWeight.Bold, color = Color(0xFFEA580C), style = MaterialTheme.typography.labelMedium)
+                                Text("Atau Klik Area Ini Untuk Pilih File JS / Script", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = bulkWorkerScriptInput,
+                            onValueChange = { bulkWorkerScriptInput = it },
+                            modifier = Modifier.fillMaxWidth().height(100.dp),
+                            textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = MaterialTheme.typography.bodySmall.fontSize)
+                        )
+
+                        Text("🌐 index.html Code:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall, color = Color(0xFF0284C7))
+                        OutlinedTextField(
+                            value = bulkHtmlInput,
+                            onValueChange = { bulkHtmlInput = it },
+                            modifier = Modifier.fillMaxWidth().height(80.dp),
+                            textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = MaterialTheme.typography.bodySmall.fontSize)
+                        )
+
+                        Button(
+                            onClick = {
+                                if (selectedBulkAccounts.isEmpty()) return@Button
+                                scope.launch {
+                                    isBulkProcessing = true
+                                    bulkDeployResultLog = "🚀 Memulai Bulk Deploy...\n\n"
+                                    try {
+                                        val generatedUrls = mutableListOf<String>()
+                                        selectedBulkAccounts.forEachIndexed { idx, acc ->
+                                            val autoProjName = "$bulkProjectPrefix${UUID.randomUUID().toString().take(6)}"
+                                            try {
+                                                val resUrl = executePagesDeploy(
+                                                    targetEmail = acc.email,
+                                                    targetApiKey = acc.apiKey,
+                                                    projectName = autoProjName,
+                                                    workerScript = bulkWorkerScriptInput,
+                                                    htmlContent = bulkHtmlInput
+                                                )
+                                                generatedUrls.add(resUrl)
+                                                bulkDeployResultLog += "🟢 $resUrl\n"
+                                            } catch (e: Exception) {
+                                                bulkDeployResultLog += "❌ ${acc.alias}: ${e.message}\n"
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        bulkDeployResultLog += "Error: ${e.message}"
+                                    } finally {
+                                        isBulkProcessing = false
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !isBulkProcessing && selectedBulkAccounts.isNotEmpty(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C))
+                        ) {
+                            Text(if (isBulkProcessing) "Memproses..." else "⚡ Eksekusi Bulk Deploy Sekarang")
+                        }
+
+                        if (bulkDeployResultLog.isNotBlank()) {
+                            Divider()
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("📋 Hasil URL Deploy:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                                Button(onClick = {
+                                    clipboardManager.setText(AnnotatedString(bulkDeployResultLog))
+                                    Toast.makeText(context, "Semua Hasil Tersalin!", Toast.LENGTH_SHORT).show()
+                                }) {
+                                    Text("📋 Copy Semua URL")
+                                }
+                            }
+                            OutlinedTextField(
+                                value = bulkDeployResultLog,
+                                onValueChange = {},
+                                readOnly = true,
+                                modifier = Modifier.fillMaxWidth().height(140.dp),
+                                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = MaterialTheme.typography.bodySmall.fontSize)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // ==========================================
+        // SUB-TAB 2: NODELOC DNS MANAGER
+        // ==========================================
+        if (mainTab == 2) {
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -645,7 +904,6 @@ fun PagesNodeLocScreen() {
                                 }
                             }
 
-                            // NODELOC HEALTH INSPECTOR CARD
                             selectedNlDomain?.let { d ->
                                 Spacer(modifier = Modifier.height(10.dp))
                                 Surface(
@@ -833,9 +1091,7 @@ fun PagesNodeLocScreen() {
                                     editNlName = r.name
                                     editNlContent = r.content
                                     showEditNlDnsDialog = true
-                                }) {
-                                    Text("✏️")
-                                }
+                                }) { Text("✏️") }
 
                                 IconButton(onClick = {
                                     val domain = selectedNlDomain ?: return@IconButton
@@ -851,16 +1107,12 @@ fun PagesNodeLocScreen() {
                                             if (resp.isSuccessful) {
                                                 statusMsg = "🗑 Record dihapus!"
                                                 loadNodeLocRecords(domain.id)
-                                            } else {
-                                                statusMsg = "❌ Gagal hapus DNS NodeLoc"
                                             }
                                         } catch (e: Exception) {
                                             statusMsg = "Error: " + e.message
                                         }
                                     }
-                                }) {
-                                    Text("🗑")
-                                }
+                                }) { Text("🗑") }
                             }
                         }
                     }
@@ -880,7 +1132,7 @@ fun PagesNodeLocScreen() {
         }
     }
 
-    // --- POP-UP MODAL: DEPLOY STUDIO (100% PROSES LENGKAP) ---
+    // --- POP-UP MODAL: DEPLOY STUDIO (DENGAN DROP ZONE VISUAL) ---
     if (showDeployDialog) {
         AlertDialog(
             onDismissRequest = { if (!isProcessing) showDeployDialog = false },
@@ -925,19 +1177,60 @@ fun PagesNodeLocScreen() {
                         }
                     }
 
-                    Text("⚡ _worker.js (Backend Script):", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = Color(0xFF16A34A))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(2.dp, Color(0xFF16A34A), RoundedCornerShape(10.dp))
+                            .background(Color(0xFFF0FDF4), RoundedCornerShape(10.dp))
+                            .clickable {
+                                filePickerTarget = "worker_single"
+                                filePickerLauncher.launch("*/*")
+                            }
+                            .dragAndDropTarget(
+                                shouldStartDragAndDrop = { true },
+                                target = remember {
+                                    object : DragAndDropTarget {
+                                        override fun onDrop(event: DragAndDropEvent): Boolean {
+                                            val clipData = event.toAndroidDragEvent().clipData
+                                            if (clipData != null && clipData.itemCount > 0) {
+                                                val uri = clipData.getItemAt(0).uri
+                                                handleReadUri(uri, "worker_single")
+                                                return true
+                                            }
+                                            return false
+                                        }
+                                    }
+                                }
+                            )
+                            .padding(12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("📥 DRAG & DROP FILE _worker.js DI SINI", fontWeight = FontWeight.Bold, color = Color(0xFF16A34A), style = MaterialTheme.typography.labelMedium)
+                            Text("Atau Klik Untuk Memilih File dari HP", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                        }
+                    }
+
                     OutlinedTextField(
                         value = rawWorkerScriptInput,
                         onValueChange = { rawWorkerScriptInput = it },
-                        modifier = Modifier.fillMaxWidth().height(120.dp),
+                        modifier = Modifier.fillMaxWidth().height(110.dp),
                         textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = MaterialTheme.typography.bodySmall.fontSize)
                     )
 
-                    Text("🌐 index.html (Frontend Asset):", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = Color(0xFF0284C7))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("🌐 index.html Code:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall, color = Color(0xFF0284C7))
+                        Button(onClick = {
+                            filePickerTarget = "html_single"
+                            filePickerLauncher.launch("*/*")
+                        }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) {
+                            Text("📂 Pilih File HTML", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
                     OutlinedTextField(
                         value = rawHtmlInput,
                         onValueChange = { rawHtmlInput = it },
-                        modifier = Modifier.fillMaxWidth().height(90.dp),
+                        modifier = Modifier.fillMaxWidth().height(80.dp),
                         textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = MaterialTheme.typography.bodySmall.fontSize)
                     )
                 }
@@ -947,102 +1240,17 @@ fun PagesNodeLocScreen() {
                     onClick = {
                         scope.launch {
                             isProcessing = true
-                            statusMsg = "Memulai alur deployment ke Pages..."
                             try {
-                                val accId = CfAccountHelper.ensureAccountId()
-                                // 1. Ambil Upload Token JWT
-                                val tokenReq = Request.Builder()
-                                    .url("https://api.cloudflare.com/client/v4/accounts/$accId/pages/projects/$targetDeployProject/upload-token")
-                                    .header("X-Auth-Email", email)
-                                    .header("X-Auth-Key", apiKey)
-                                    .get().build()
-                                val tokenResp = withContext(Dispatchers.IO) { httpClient.newCall(tokenReq).execute() }
-                                val tokenJson = gson.fromJson(tokenResp.body?.string() ?: "", JsonObject::class.java)
-                                val jwt = tokenJson?.getAsJsonObject("result")?.get("jwt")?.asString
-
-                                if (jwt.isNullOrBlank()) {
-                                    statusMsg = "❌ Gagal generate upload token"
-                                    return@launch
-                                }
-
-                                // 2. Bikin Hash HTML Asset
-                                val htmlBytes = rawHtmlInput.toByteArray()
-                                val md = MessageDigest.getInstance("MD5")
-                                val md5Bytes = md.digest(htmlBytes)
-                                val hashHex = md5Bytes.joinToString("") { "%02x".format(it) }
-
-                                val manifestObj = JsonObject().apply { addProperty("/index.html", hashHex) }
-                                val hashesArray = JsonArray().apply { add(hashHex) }
-
-                                // 3. Check Missing Assets
-                                val checkReq = Request.Builder()
-                                    .url("https://api.cloudflare.com/client/v4/pages/assets/check-missing")
-                                    .header("Authorization", "Bearer $jwt")
-                                    .header("Content-Type", "application/json")
-                                    .post(JsonObject().apply { add("hashes", hashesArray) }.toString().toRequestBody("application/json".toMediaTypeOrNull()))
-                                    .build()
-
-                                val checkResp = withContext(Dispatchers.IO) { httpClient.newCall(checkReq).execute() }
-                                val checkJson = gson.fromJson(checkResp.body?.string() ?: "", JsonObject::class.java)
-                                val missingHashes = checkJson?.getAsJsonArray("result") ?: JsonArray()
-
-                                // 4. Upload Missing Assets
-                                if (missingHashes.size() > 0) {
-                                    val b64Value = Base64.getEncoder().encodeToString(htmlBytes)
-                                    val uploadItem = JsonObject().apply {
-                                        addProperty("key", hashHex)
-                                        addProperty("value", b64Value)
-                                        add("metadata", JsonObject().apply { addProperty("contentType", "text/html; charset=utf-8") })
-                                        addProperty("base64", true)
-                                    }
-                                    val uploadArray = JsonArray().apply { add(uploadItem) }
-
-                                    val upReq = Request.Builder()
-                                        .url("https://api.cloudflare.com/client/v4/pages/assets/upload")
-                                        .header("Authorization", "Bearer $jwt")
-                                        .header("Content-Type", "application/json")
-                                        .post(uploadArray.toString().toRequestBody("application/json".toMediaTypeOrNull()))
-                                        .build()
-                                    withContext(Dispatchers.IO) { httpClient.newCall(upReq).execute() }
-
-                                    val upsertReq = Request.Builder()
-                                        .url("https://api.cloudflare.com/client/v4/pages/assets/upsert-hashes")
-                                        .header("Authorization", "Bearer $jwt")
-                                        .header("Content-Type", "application/json")
-                                        .post(JsonObject().apply { add("hashes", hashesArray) }.toString().toRequestBody("application/json".toMediaTypeOrNull()))
-                                        .build()
-                                    withContext(Dispatchers.IO) { httpClient.newCall(upsertReq).execute() }
-                                }
-
-                                // 5. Deploy via Multipart Form Data
-                                val formBodyBuilder = MultipartBody.Builder().setType(MultipartBody.FORM)
-                                    .addFormDataPart("manifest", manifestObj.toString())
-
-                                if (rawWorkerScriptInput.isNotBlank()) {
-                                    formBodyBuilder.addFormDataPart(
-                                        "_worker.js",
-                                        "_worker.js",
-                                        rawWorkerScriptInput.toByteArray().toRequestBody("application/javascript".toMediaTypeOrNull())
-                                    )
-                                }
-
-                                val deployReq = Request.Builder()
-                                    .url("https://api.cloudflare.com/client/v4/accounts/$accId/pages/projects/$targetDeployProject/deployments")
-                                    .header("X-Auth-Email", email)
-                                    .header("X-Auth-Key", apiKey)
-                                    .post(formBodyBuilder.build())
-                                    .build()
-
-                                val deployResp = withContext(Dispatchers.IO) { httpClient.newCall(deployReq).execute() }
-                                val deployJson = gson.fromJson(deployResp.body?.string() ?: "", JsonObject::class.java)
-
-                                if (deployJson != null && deployJson.get("success")?.asBoolean == true) {
-                                    statusMsg = "🚀 DEPLOY BERHASIL! Script & Frontend aktif."
-                                    showDeployDialog = false
-                                    loadPagesProjects()
-                                } else {
-                                    statusMsg = "❌ Deploy gagal: " + deployResp.code
-                                }
+                                val resUrl = executePagesDeploy(
+                                    targetEmail = email,
+                                    targetApiKey = apiKey,
+                                    projectName = targetDeployProject,
+                                    workerScript = rawWorkerScriptInput,
+                                    htmlContent = rawHtmlInput
+                                )
+                                statusMsg = "🚀 DEPLOY BERHASIL! Active di: $resUrl"
+                                showDeployDialog = false
+                                loadPagesProjects()
                             } catch (e: Exception) {
                                 statusMsg = "Error Deploy: " + e.message
                             } finally {
@@ -1318,7 +1526,6 @@ fun PagesNodeLocScreen() {
                                     if (resp.isSuccessful) {
                                         logText += "✅ Pages: $dom\n"
 
-                                        // Auto NodeLoc Sync CNAME
                                         if (autoSyncNodeLocCname && nodeLocTokenInput.isNotBlank() && selectedNlDomain != null) {
                                             val subHost = dom.replace(".${selectedNlDomain?.fullDomain}", "")
                                             val nlPayload = JsonObject().apply {
