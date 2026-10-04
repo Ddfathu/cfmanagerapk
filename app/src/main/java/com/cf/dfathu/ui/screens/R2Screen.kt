@@ -49,14 +49,15 @@ fun R2Screen() {
     var workerExpanded by remember { mutableStateOf(false) }
 
     var bindingList by remember { mutableStateOf<List<WorkerBindingUiItem>>(emptyList()) }
+    var rawBindingsList by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
     var isLoadingBindings by remember { mutableStateOf(false) }
 
     // Form Tambah Bucket
     var newBucketName by remember { mutableStateOf("") }
     var isCreatingBucket by remember { mutableStateOf(false) }
 
-    // Form Tambah Binding (Sesuai SC Web: R2 & KV)
-    var bindingType by remember { mutableStateOf("r2_bucket") } // "r2_bucket" atau "kv_namespace"
+    // Form Tambah Binding
+    var bindingType by remember { mutableStateOf("r2_bucket") }
     var bindingVarName by remember { mutableStateOf("MY_R2") }
     var selectedBucketForBind by remember { mutableStateOf("") }
     var bucketDropdownExpanded by remember { mutableStateOf(false) }
@@ -92,6 +93,9 @@ fun R2Screen() {
                     if (selectedBucketForBind.isBlank() && list.isNotEmpty()) {
                         selectedBucketForBind = list[0].name
                     }
+                } else {
+                    val err = bodyJson?.getAsJsonArray("errors")?.firstOrNull()?.asJsonObject?.get("message")?.asString ?: ("HTTP " + res.code())
+                    statusMsg = "Gagal memuat bucket: " + err
                 }
             } catch (e: Exception) {
                 statusMsg = "Error load buckets: " + e.message
@@ -107,11 +111,28 @@ fun R2Screen() {
             isLoadingBindings = true
             try {
                 val accId = CfAccountHelper.ensureAccountId()
+                var rawResult: List<JsonObject>? = null
+
                 val res = ApiClient.api.getWorkerBindings(accId, workerName)
                 if (res.isSuccessful && res.body()?.success == true) {
-                    val rawList = res.body()?.result ?: emptyList()
+                    rawResult = res.body()?.result
+                }
+
+                if (rawResult == null) {
+                    val setRes = ApiClient.api.getWorkerSettings(accId, workerName)
+                    if (setRes.isSuccessful && setRes.body()?.success == true) {
+                        val rObj = setRes.body()?.result?.asJsonObject
+                        val bArr = rObj?.getAsJsonArray("bindings")
+                        if (bArr != null) {
+                            rawResult = bArr.mapNotNull { if (it.isJsonObject) it.asJsonObject else null }
+                        }
+                    }
+                }
+
+                if (rawResult != null) {
+                    rawBindingsList = rawResult
                     val parsed = mutableListOf<WorkerBindingUiItem>()
-                    rawList.forEach { obj ->
+                    rawResult.forEach { obj ->
                         val type = obj.get("type")?.asString ?: ""
                         val name = obj.get("name")?.asString ?: ""
                         if (type == "r2_bucket") {
@@ -123,12 +144,20 @@ fun R2Screen() {
                         }
                     }
                     bindingList = parsed
+                    if (parsed.isEmpty()) {
+                        statusMsg = "Worker '" + workerName + "' belum memiliki binding R2 atau KV."
+                    } else {
+                        statusMsg = "✅ Berhasil memuat " + parsed.size + " binding dari '" + workerName + "'."
+                    }
                 } else {
                     bindingList = emptyList()
+                    rawBindingsList = emptyList()
+                    statusMsg = "Gagal memuat binding untuk worker '" + workerName + "'."
                 }
             } catch (e: Exception) {
                 bindingList = emptyList()
-                statusMsg = "Gagal memuat binding: " + e.message
+                rawBindingsList = emptyList()
+                statusMsg = "Error: " + e.message
             } finally {
                 isLoadingBindings = false
             }
@@ -180,7 +209,7 @@ fun R2Screen() {
             ) {
                 Column {
                     Text("💿 Cloudflare R2 & Bindings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("Manajemen Bucket & Binding Worker (Persis SC Web)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text("Kelola Bucket & Ikat ke Worker (Persis SC Web)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                 }
                 IconButton(
                     onClick = {
@@ -318,7 +347,7 @@ fun R2Screen() {
             }
         }
 
-        // --- SUB-TAB 1: WORKER BINDINGS VIA ATOMIC MULTIPART ---
+        // --- SUB-TAB 1: WORKER BINDINGS ---
         if (selectedTab == 1) {
             item {
                 Card(
@@ -335,10 +364,10 @@ fun R2Screen() {
                             onExpandedChange = { workerExpanded = !workerExpanded }
                         ) {
                             OutlinedTextField(
-                                value = selectedWorker.ifBlank { "Pilih Worker..." },
+                                value = selectedWorker.ifBlank { "Pilih Worker Target" },
                                 onValueChange = {},
                                 readOnly = true,
-                                label = { Text("Worker") },
+                                label = { Text("Worker Target") },
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = workerExpanded) },
                                 modifier = Modifier.menuAnchor().fillMaxWidth()
                             )
@@ -470,14 +499,8 @@ fun R2Screen() {
                                     try {
                                         val accId = CfAccountHelper.ensureAccountId()
 
-                                        val getRes = ApiClient.api.getWorkerBindings(accId, w)
-                                        val existingBindings = if (getRes.isSuccessful && getRes.body()?.success == true) {
-                                            getRes.body()?.result?.toMutableList() ?: mutableListOf()
-                                        } else {
-                                            mutableListOf()
-                                        }
-
-                                        val filteredList = existingBindings.filter {
+                                        val existingList = rawBindingsList.toMutableList()
+                                        val filteredList = existingList.filter {
                                             val name = it.get("name")?.asString
                                             !(name == bindingVarName)
                                         }.toMutableList()
@@ -541,10 +564,10 @@ fun R2Screen() {
                 }
             }
 
-            if (bindingList.isEmpty()) {
+            if (bindingList.isEmpty() && !isLoadingBindings) {
                 item {
                     Text(
-                        text = if (isLoadingBindings) "Memuat binding worker..." else "Tidak ada binding R2 atau KV yang terpasang di worker ini.",
+                        text = if (selectedWorker.isBlank()) "Silakan pilih worker terlebih dahulu di atas." else "Tidak ada binding R2 atau KV yang terpasang di worker ini.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline
                     )
@@ -601,24 +624,20 @@ fun R2Screen() {
                                 statusMsg = "Mencopot binding env." + b.name + "..."
                                 try {
                                     val accId = CfAccountHelper.ensureAccountId()
-                                    val getRes = ApiClient.api.getWorkerBindings(accId, selectedWorker)
-                                    if (getRes.isSuccessful && getRes.body()?.success == true) {
-                                        val list = getRes.body()?.result?.toMutableList() ?: mutableListOf()
-                                        val filtered = list.filter { !(it.get("name")?.asString == b.name) }
+                                    val filtered = rawBindingsList.filter { !(it.get("name")?.asString == b.name) }
 
-                                        val settingsMap = mapOf("bindings" to filtered)
-                                        val settingsJsonStr = gson.toJson(settingsMap)
-                                        val settingsRequestBody = settingsJsonStr.toRequestBody("application/json".toMediaTypeOrNull())
-                                        val settingsPart = MultipartBody.Part.createFormData("settings", "settings.json", settingsRequestBody)
+                                    val settingsMap = mapOf("bindings" to filtered)
+                                    val settingsJsonStr = gson.toJson(settingsMap)
+                                    val settingsRequestBody = settingsJsonStr.toRequestBody("application/json".toMediaTypeOrNull())
+                                    val settingsPart = MultipartBody.Part.createFormData("settings", "settings.json", settingsRequestBody)
 
-                                        val patchRes = ApiClient.api.patchWorkerSettingsMultipart(accId, selectedWorker, settingsPart)
-                                        if (patchRes.isSuccessful && patchRes.body()?.success == true) {
-                                            statusMsg = "🗑 Binding env." + b.name + " berhasil dicopot!"
-                                            loadBindings(selectedWorker)
-                                        } else {
-                                            val err = patchRes.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + patchRes.code())
-                                            statusMsg = "Gagal mencopot: " + err
-                                        }
+                                    val patchRes = ApiClient.api.patchWorkerSettingsMultipart(accId, selectedWorker, settingsPart)
+                                    if (patchRes.isSuccessful && patchRes.body()?.success == true) {
+                                        statusMsg = "🗑 Binding env." + b.name + " berhasil dicopot!"
+                                        loadBindings(selectedWorker)
+                                    } else {
+                                        val err = patchRes.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + patchRes.code())
+                                        statusMsg = "Gagal mencopot: " + err
                                     }
                                 } catch (e: Exception) {
                                     statusMsg = "Error: " + e.message

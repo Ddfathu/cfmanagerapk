@@ -69,7 +69,7 @@ fun PagesScreen() {
     var isLoadingProjects by remember { mutableStateOf(false) }
     var statusMsg by remember { mutableStateOf("") }
 
-    // --- TAB 1: FORM BUAT PROJECT BARU (DOH 1.1.1.1 CHECK PERSIS SC WEB) ---
+    // --- TAB 1: FORM BUAT PROJECT BARU (DOH 1.1.1.1 PERSIS SC WEB) ---
     var newCreateProjectName by remember { mutableStateOf("") }
     var newCreateCompatDate by remember { mutableStateOf("2024-01-01") }
     var newCreateEnableNodeCompat by remember { mutableStateOf(true) }
@@ -78,7 +78,7 @@ fun PagesScreen() {
     var isSubdomainAvailable by remember { mutableStateOf<Boolean?>(null) }
     var isCreatingNewProject by remember { mutableStateOf(false) }
 
-    // --- TAB 2: DEPLOY STUDIO ---
+    // --- TAB 2: DEPLOY STUDIO (PERSIS SC WEB) ---
     var targetProjectName by remember { mutableStateOf("") }
     var deployCompatDate by remember { mutableStateOf("2024-01-01") }
     var deployEnableNodeCompat by remember { mutableStateOf(true) }
@@ -127,7 +127,6 @@ fun PagesScreen() {
         } catch (_: Exception) {}
     }
 
-    // CEK KETERSEDIAAN SUBDOMAIN VIA DOH CLOUDFLARE 1.1.1.1 (PERSIS SC WEB)
     fun checkSubdomainWithDoh(nameInput: String) {
         val name = nameInput.trim().lowercase()
         if (name.isBlank()) {
@@ -138,7 +137,7 @@ fun PagesScreen() {
         val targetDomain = "$name.pages.dev"
         scope.launch {
             isCheckingSubdomain = true
-            subdomainCheckMsg = "⏳ Mengecek ketersediaan $targetDomain via DoH 1.1.1.1..."
+            subdomainCheckMsg = "⏳ Mengecek ketersediaan $targetDomain via Cloudflare DNS..."
             isSubdomainAvailable = null
             try {
                 val client = OkHttpClient()
@@ -152,13 +151,12 @@ fun PagesScreen() {
                 val json = gson.fromJson(respText, JsonObject::class.java)
                 val status = json.get("Status")?.asInt ?: 0
 
-                // Status 3 = NXDOMAIN (Domain belum ada / belum terdaftar = TERSEDIA)
                 if (status == 3) {
                     isSubdomainAvailable = true
-                    subdomainCheckMsg = "🟢 $targetDomain TERSEDIA! URL aman & unik."
+                    subdomainCheckMsg = "🟢 " + targetDomain + " TERSEDIA! URL aman, langsung klik Buat Project."
                 } else {
                     isSubdomainAvailable = false
-                    subdomainCheckMsg = "🔴 $targetDomain SUDAH TERPAKAI! Cloudflare akan menambahkan angka acak."
+                    subdomainCheckMsg = "🔴 " + targetDomain + " SUDAH TERPAKAI! Cloudflare bakal acak URL jadi " + name + "-xyz.pages.dev. Pakai nama lain."
                 }
             } catch (e: Exception) {
                 isSubdomainAvailable = null
@@ -408,7 +406,7 @@ fun PagesScreen() {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Daftar Project Pages Aktif (${projects.size}):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Daftar Project Pages Aktif (" + projects.size + "):", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Button(
                         onClick = { selectedPagesTab = 1 },
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
@@ -426,7 +424,7 @@ fun PagesScreen() {
 
             items(items = projects, key = { it }) { pName ->
                 val snapshot = historyStorage.getSnapshot(pName)
-                val fullUrl = "https://$pName.pages.dev"
+                val fullUrl = "https://" + pName + ".pages.dev"
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -440,10 +438,10 @@ fun PagesScreen() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("📄 $pName", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                Text("📄 " + pName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                 Spacer(modifier = Modifier.height(3.dp))
                                 Text(
-                                    text = "🔗 $fullUrl ↗",
+                                    text = "🔗 " + fullUrl + " ↗",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary,
                                     textDecoration = TextDecoration.Underline,
@@ -452,7 +450,7 @@ fun PagesScreen() {
                                 )
                                 if (snapshot != null) {
                                     Spacer(modifier = Modifier.height(2.dp))
-                                    Text("💾 Deploy: ${snapshot.deployedAt} (Compat: ${snapshot.compatDate})", style = MaterialTheme.typography.labelSmall, color = Color(0xFF16A34A))
+                                    Text("💾 Deploy: " + snapshot.deployedAt + " (Compat: " + snapshot.compatDate + ")", style = MaterialTheme.typography.labelSmall, color = Color(0xFF16A34A))
                                 }
                             }
                         }
@@ -621,7 +619,7 @@ fun PagesScreen() {
                                         )
                                         val res = ApiClient.api.createPagesProject(accId, payload)
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "🎉 Project Pages '$target.pages.dev' berhasil dibuat!"
+                                            statusMsg = "🎉 Project Pages '" + target + ".pages.dev' berhasil dibuat!"
                                             targetProjectName = target
                                             deployCompatDate = newCreateCompatDate
                                             deployEnableNodeCompat = newCreateEnableNodeCompat
@@ -649,7 +647,7 @@ fun PagesScreen() {
             }
         }
 
-        // ==================== SUB-TAB 2: DEPLOY STUDIO (DENGAN TOMBOL TARIK TERAKHIR) ====================
+        // ==================== SUB-TAB 2: DEPLOY STUDIO ====================
         if (selectedPagesTab == 2) {
             item {
                 Card(
@@ -665,7 +663,7 @@ fun PagesScreen() {
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = if (targetProjectName.isNotBlank()) "🚀 Deploy: $targetProjectName" else "🚀 Studio Deploy Pages",
+                                    text = if (targetProjectName.isNotBlank()) "🚀 Deploy: " + targetProjectName else "🚀 Studio Deploy Pages",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -944,7 +942,7 @@ fun PagesScreen() {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Akun Target (${selectedAccountIndices.size}/${accounts.size}):", fontWeight = FontWeight.Bold)
+                            Text("Akun Target (" + selectedAccountIndices.size + "/" + accounts.size + "):", fontWeight = FontWeight.Bold)
                             Row {
                                 TextButton(onClick = { selectedAccountIndices = accounts.indices.toSet() }) { Text("Semua") }
                                 TextButton(onClick = { selectedAccountIndices = emptySet() }) { Text("Kosongkan") }
@@ -975,7 +973,7 @@ fun PagesScreen() {
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Column {
-                                            Text(acc.alias.ifBlank { "Akun #${idx + 1}" }, fontWeight = FontWeight.Bold)
+                                            Text(acc.alias.ifBlank { "Akun #" + (idx + 1) }, fontWeight = FontWeight.Bold)
                                             Text(acc.email, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                                         }
                                     }
@@ -999,7 +997,7 @@ fun PagesScreen() {
                                     try {
                                         val targets = selectedAccountIndices.map { accounts[it] }
                                         targets.forEachIndexed { i, acc ->
-                                            val logPrefix = "[${i + 1}/${targets.size}] ${acc.alias}: "
+                                            val logPrefix = "[" + (i + 1) + "/" + targets.size + "] " + acc.alias + ": "
                                             try {
                                                 AppConfig.activeEmail = acc.email
                                                 AppConfig.activeApiKey = acc.apiKey
@@ -1023,13 +1021,13 @@ fun PagesScreen() {
                                                 )
                                                 val res = ApiClient.api.createPagesProject(accId, payload)
                                                 if (res.isSuccessful && res.body()?.success == true) {
-                                                    bulkLogs = bulkLogs + (logPrefix + "✅ Sukses (https://$pName.pages.dev)")
+                                                    bulkLogs = bulkLogs + (logPrefix + "✅ Sukses (https://" + pName + ".pages.dev)")
                                                 } else {
                                                     val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
-                                                    bulkLogs = bulkLogs + (logPrefix + "⚠️ Gagal: $err")
+                                                    bulkLogs = bulkLogs + (logPrefix + "⚠️ Gagal: " + err)
                                                 }
                                             } catch (e: Exception) {
-                                                bulkLogs = bulkLogs + (logPrefix + "❌ Error: ${e.message}")
+                                                bulkLogs = bulkLogs + (logPrefix + "❌ Error: " + e.message)
                                             }
                                         }
                                     } finally {
@@ -1044,7 +1042,7 @@ fun PagesScreen() {
                             modifier = Modifier.fillMaxWidth(),
                             enabled = !isBulkRunning && bulkProjectName.isNotBlank() && selectedAccountIndices.isNotEmpty()
                         ) {
-                            Text(if (isBulkRunning) "Mengeksekusi..." else "🚀 Jalankan Bulk Deploy (${selectedAccountIndices.size} Akun)")
+                            Text(if (isBulkRunning) "Mengeksekusi..." else "🚀 Jalankan Bulk Deploy (" + selectedAccountIndices.size + " Akun)")
                         }
 
                         if (bulkLogs.isNotEmpty()) {
@@ -1162,7 +1160,7 @@ fun PagesScreen() {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("🌐 Custom Domain", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            Text("Project: $activeProjectForDomain", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                            Text("Project: " + activeProjectForDomain, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                         }
                         IconButton(onClick = { loadCustomDomains(activeProjectForDomain) }, enabled = !isLoadingDomains) {
                             Text(if (isLoadingDomains) "⏳" else "🔄")
@@ -1193,15 +1191,15 @@ fun PagesScreen() {
                                         val payload = mapOf("name" to customDomainInput)
                                         val res = ApiClient.api.addPagesCustomDomain(accId, activeProjectForDomain, payload)
                                         if (res.isSuccessful && res.body()?.success == true) {
-                                            statusMsg = "✅ Custom domain $customDomainInput ditambahkan!"
+                                            statusMsg = "✅ Custom domain " + customDomainInput + " ditambahkan!"
                                             customDomainInput = ""
                                             loadCustomDomains(activeProjectForDomain)
                                         } else {
                                             val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
-                                            statusMsg = "Gagal: $err"
+                                            statusMsg = "Gagal: " + err
                                         }
                                     } catch (e: Exception) {
-                                        statusMsg = "Error: ${e.message}"
+                                        statusMsg = "Error: " + e.message
                                     } finally {
                                         isAddingDomain = false
                                     }
@@ -1217,7 +1215,7 @@ fun PagesScreen() {
                     HorizontalDivider()
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Text("Domain Terhubung (${registeredDomains.size}):", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Text("Domain Terhubung (" + registeredDomains.size + "):", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
 
                     if (registeredDomains.isEmpty()) {
@@ -1266,11 +1264,11 @@ fun PagesScreen() {
                                                     val accId = CfAccountHelper.ensureAccountId()
                                                     val res = ApiClient.api.deletePagesCustomDomain(accId, activeProjectForDomain, dom.name)
                                                     if (res.isSuccessful && res.body()?.success == true) {
-                                                        statusMsg = "🗑 Domain ${dom.name} dicopot!"
+                                                        statusMsg = "🗑 Domain " + dom.name + " dicopot!"
                                                         loadCustomDomains(activeProjectForDomain)
                                                     }
                                                 } catch (e: Exception) {
-                                                    statusMsg = "Error: ${e.message}"
+                                                    statusMsg = "Error: " + e.message
                                                 }
                                             }
                                         }, modifier = Modifier.size(32.dp)) {
@@ -1296,24 +1294,24 @@ fun PagesScreen() {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
             title = { Text("Hapus Project Pages?") },
-            text = { Text("Yakin ingin menghapus project '$projectToDelete' secara permanen?") },
+            text = { Text("Yakin ingin menghapus project '" + projectToDelete + "' secara permanen?") },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteConfirm = false
                     scope.launch {
-                        statusMsg = "Menghapus project '$projectToDelete'..."
+                        statusMsg = "Menghapus project '" + projectToDelete + "'..."
                         try {
                             val accId = CfAccountHelper.ensureAccountId()
                             val res = ApiClient.api.deletePagesProject(accId, projectToDelete)
                             if (res.isSuccessful && res.body()?.success == true) {
-                                statusMsg = "🗑 Project '$projectToDelete' berhasil dihapus!"
+                                statusMsg = "🗑 Project '" + projectToDelete + "' berhasil dihapus!"
                                 loadProjects()
                             } else {
                                 val err = res.body()?.errors?.firstOrNull()?.message ?: ("HTTP " + res.code())
                                 statusMsg = "Gagal menghapus: " + err
                             }
                         } catch (e: Exception) {
-                            statusMsg = "Error: ${e.message}"
+                            statusMsg = "Error: " + e.message
                         }
                     }
                 }) {
