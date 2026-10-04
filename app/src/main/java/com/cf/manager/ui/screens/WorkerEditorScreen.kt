@@ -63,25 +63,18 @@ fun WorkerEditorScreen() {
     var isLoadingWorkers by remember { mutableStateOf(false) }
     var statusMsg by remember { mutableStateOf("") }
 
-    // Modal Smart Wrangler Global
     var detectedBindings by remember { mutableStateOf<List<DetectedBinding>>(emptyList()) }
     var showWranglerModal by remember { mutableStateOf(false) }
 
-    // State Buat Worker Baru
     var showCreateDialog by remember { mutableStateOf(false) }
     var newWorkerName by remember { mutableStateOf("") }
-    var newWorkerCode by remember { mutableStateOf("export default {
-  async fetch(request, env) {
-    return new Response("Halo dari Cloudflare Worker!");
-  }
-};") }
+    var newWorkerCode by remember { mutableStateOf("export default {\n  async fetch(request, env) {\n    return new Response(\"Halo dari Cloudflare Worker!\");\n  }\n};") }
     var newRawUrl by remember { mutableStateOf("") }
     var newCompatDate by remember { mutableStateOf("2024-01-01") }
     var newEnableNodeCompat by remember { mutableStateOf(true) }
     var isFetchingRawNew by remember { mutableStateOf(false) }
     var isDeployingNew by remember { mutableStateOf(false) }
 
-    // State Edit Script Worker
     var showEditDialog by remember { mutableStateOf(false) }
     var activeWorkerToEdit by remember { mutableStateOf("") }
     var editingScriptCode by remember { mutableStateOf("") }
@@ -92,7 +85,6 @@ fun WorkerEditorScreen() {
     var isLoadingCode by remember { mutableStateOf(false) }
     var isSavingEdit by remember { mutableStateOf(false) }
 
-    // State Rute Domain Pop-up
     var showRouteDialog by remember { mutableStateOf(false) }
     var activeWorkerForRoute by remember { mutableStateOf("") }
     var activeWorkerRoutes by remember { mutableStateOf<List<WorkerDomainItem>>(emptyList()) }
@@ -100,7 +92,6 @@ fun WorkerEditorScreen() {
     var isLoadingRoutes by remember { mutableStateOf(false) }
     var isAddingRoute by remember { mutableStateOf(false) }
 
-    // State Hapus Worker
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var workerToDelete by remember { mutableStateOf("") }
 
@@ -170,7 +161,6 @@ fun WorkerEditorScreen() {
             try {
                 val accId = CfAccountHelper.ensureAccountId()
                 
-                // 1. Ambil Subdomain Workers.dev akun
                 try {
                     val subRes = ApiClient.api.getAccountSubdomain(accId)
                     if (subRes.isSuccessful && subRes.body()?.success == true) {
@@ -178,7 +168,6 @@ fun WorkerEditorScreen() {
                     }
                 } catch (_: Exception) {}
 
-                // 2. Ambil List Workers
                 val res = ApiClient.api.listWorkers(accId)
                 if (res.isSuccessful && res.body()?.success == true) {
                     val rawList = res.body()?.result ?: emptyList()
@@ -242,11 +231,7 @@ fun WorkerEditorScreen() {
                     newRawUrl = ""
                     newCompatDate = "2024-01-01"
                     newEnableNodeCompat = true
-                    newWorkerCode = "export default {
-  async fetch(request, env) {
-    return new Response("Halo dari Cloudflare Worker!");
-  }
-};"
+                    newWorkerCode = "export default {\n  async fetch(request, env) {\n    return new Response(\"Halo dari Cloudflare Worker!\");\n  }\n};"
                     showCreateDialog = true
                 },
                 modifier = Modifier.fillMaxWidth()
@@ -295,7 +280,6 @@ fun WorkerEditorScreen() {
                             Text("⚡ $wName", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             Spacer(modifier = Modifier.height(4.dp))
 
-                            // URL Workers.dev bisa diklik
                             if (workersDevUrl.isNotBlank()) {
                                 Text(
                                     text = "🔗 $workersDevUrl",
@@ -306,7 +290,6 @@ fun WorkerEditorScreen() {
                                 )
                             }
 
-                            // URL Custom Domain bisa diklik
                             if (!customDomain.isNullOrBlank()) {
                                 val customUrl = "https://$customDomain"
                                 Text(
@@ -397,7 +380,6 @@ fun WorkerEditorScreen() {
         }
     }
 
-    // ================= MODAL EDIT SCRIPT (ATOMIC MULTIPART DEPLOY) =================
     if (showEditDialog && activeWorkerToEdit.isNotBlank()) {
         Dialog(
             onDismissRequest = { if (!isSavingEdit) showEditDialog = false },
@@ -578,7 +560,6 @@ fun WorkerEditorScreen() {
         }
     }
 
-    // ================= MODAL BUAT WORKER BARU =================
     if (showCreateDialog) {
         Dialog(
             onDismissRequest = { if (!isDeployingNew) showCreateDialog = false },
@@ -765,7 +746,6 @@ fun WorkerEditorScreen() {
         }
     }
 
-    // ================= MODAL SMART WRANGLER =================
     if (showWranglerModal) {
         Dialog(onDismissRequest = { showWranglerModal = false }) {
             Surface(
@@ -830,7 +810,6 @@ fun WorkerEditorScreen() {
         }
     }
 
-    // ================= MODAL RUTE DOMAIN =================
     if (showRouteDialog && activeWorkerForRoute.isNotBlank()) {
         Dialog(onDismissRequest = { showRouteDialog = false }) {
             Surface(
@@ -961,7 +940,7 @@ fun WorkerEditorScreen() {
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Alignment.End) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = { showRouteDialog = false }) { Text("Tutup") }
                     }
                 }
@@ -990,7 +969,7 @@ fun WorkerEditorScreen() {
                                 statusMsg = "Gagal menghapus: $err"
                             }
                         } catch (e: Exception) {
-                            statusMsg = "Error: ${e.message}"
+                            statusMsg = "Error: \${e.message}"
                         }
                     }
                 }) {

@@ -1,55 +1,81 @@
 package com.cf.manager.data.api
 
-import com.cf.manager.data.AppConfig
-import okhttp3.Interceptor
-import okhttp3.OkHttpClient
-import okhttp3.Response
-import okhttp3.logging.HttpLoggingInterceptor
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
-import java.util.concurrent.TimeUnit
+import com.google.gson.JsonObject
+import okhttp3.MultipartBody
+import okhttp3.ResponseBody
+import retrofit2.Response
+import retrofit2.http.*
 
-object ApiClient {
-    const val CLOUDFLARE_BASE_URL = "https://api.cloudflare.com/client/v4/"
+interface WorkerApi {
+    @GET("accounts/{accountId}/workers/services")
+    suspend fun listWorkers(@Path("accountId") accountId: String): Response<CfListResponse>
 
-    private val authInterceptor = Interceptor { chain ->
-        val original = chain.request()
-        val builder = original.newBuilder()
+    @GET("accounts/{accountId}/workers/services/{scriptName}/environments/production/content")
+    suspend fun getWorkerCode(
+        @Path("accountId") accountId: String,
+        @Path("scriptName") scriptName: String
+    ): Response<ResponseBody>
 
-        // Suntikkan header otentikasi resmi Cloudflare v4 langsung
-        if (AppConfig.activeEmail.isNotBlank()) {
-            builder.header("X-Auth-Email", AppConfig.activeEmail)
-        }
-        if (AppConfig.activeApiKey.isNotBlank()) {
-            if (AppConfig.activeApiKey.startsWith("Bearer ", ignoreCase = true)) {
-                builder.header("Authorization", AppConfig.activeApiKey)
-            } else {
-                builder.header("X-Auth-Key", AppConfig.activeApiKey)
-            }
-        }
+    @Multipart
+    @PUT("accounts/{accountId}/workers/services/{scriptName}/environments/production/content")
+    suspend fun deployWorkerMultipart(
+        @Path("accountId") accountId: String,
+        @Path("scriptName") scriptName: String,
+        @Part("metadata") metadata: okhttp3.RequestBody,
+        @Part script: MultipartBody.Part
+    ): Response<CfStandardResponse>
 
-        chain.proceed(builder.build())
-    }
+    @GET("accounts/{accountId}/workers/domains")
+    suspend fun listWorkerDomains(@Path("accountId") accountId: String): Response<CfListResponse>
 
-    private val loggingInterceptor = HttpLoggingInterceptor().apply {
-        level = HttpLoggingInterceptor.Level.BODY
-    }
+    @PUT("accounts/{accountId}/workers/domains")
+    suspend fun putWorkerDomain(
+        @Path("accountId") accountId: String,
+        @Body body: Map<String, String>
+    ): Response<CfStandardResponse>
 
-    private val client = OkHttpClient.Builder()
-        .addInterceptor(authInterceptor)
-        .addInterceptor(loggingInterceptor)
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .build()
+    @DELETE("accounts/{accountId}/workers/domains/{domainId}")
+    suspend fun deleteWorkerDomain(
+        @Path("accountId") accountId: String,
+        @Path("domainId") domainId: String
+    ): Response<CfStandardResponse>
 
-    private val retrofit = Retrofit.Builder()
-        .baseUrl(CLOUDFLARE_BASE_URL)
-        .client(client)
-        .addConverterFactory(GsonConverterFactory.create())
-        .build()
+    @DELETE("accounts/{accountId}/workers/services/{scriptName}")
+    suspend fun deleteWorker(
+        @Path("accountId") accountId: String,
+        @Path("scriptName") scriptName: String
+    ): Response<CfStandardResponse>
 
-    val api: WorkerApi = retrofit.create(WorkerApi::class.java)
+    @GET("accounts/{accountId}/workers/services/{scriptName}/environments/production/settings")
+    suspend fun getWorkerSettings(
+        @Path("accountId") accountId: String,
+        @Path("scriptName") scriptName: String
+    ): Response<CfStandardResponse>
 
-    var activeAccountId: String = ""
+    // --- TAMBAHAN BARU SESUAI WEB DASHBOARD ---
+    @GET("accounts/{accountId}/workers/subdomain")
+    suspend fun getAccountSubdomain(
+        @Path("accountId") accountId: String
+    ): Response<CfStandardResponse>
+
+    @GET("accounts/{accountId}/workers/services/{serviceName}/environments/production/bindings")
+    suspend fun getWorkerBindings(
+        @Path("accountId") accountId: String,
+        @Path("serviceName") serviceName: String
+    ): Response<CfBindingListResponse>
+
+    @Multipart
+    @PATCH("accounts/{accountId}/workers/services/{serviceName}/environments/production/settings")
+    suspend fun patchWorkerSettingsMultipart(
+        @Path("accountId") accountId: String,
+        @Path("serviceName") serviceName: String,
+        @Part settings: MultipartBody.Part
+    ): Response<CfStandardResponse>
 }
+
+// Data class pendukung binding list
+data class CfBindingListResponse(
+    val success: Boolean,
+    val errors: List<CfError>?,
+    val result: List<JsonObject>?
+)
